@@ -1,0 +1,17 @@
+{
+    "version": "1.0.0",
+    "name": "Laboratory",
+    "appType":"APP",
+    "description": "Laboratory workflow for DHIS2 Tracker",
+    "launch_path": "index.html",
+    "icons": {
+        "16": "img/icon.png",
+        "48": "img/icon.png",
+        "128": "img/icon.png"
+    },
+    "activities": {
+        "dhis": {
+            "href": "*"
+        }
+    }
+}

@@ -1,0 +1,1014 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Laboratory Results</title>
+
+    <!-- For production DHIS2 app, bundle jQuery locally -->
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background: #f7f9fa;
+            color: #212934;
+        }
+
+        .header {
+            background: #1976d2;
+            color: white;
+            padding: 16px 24px;
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: auto;
+            padding: 24px;
+        }
+
+        .card {
+            background: white;
+            border: 1px solid #d5dce2;
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .patient-name {
+            font-size: 22px;
+            font-weight: bold;
+            margin-bottom: 8px;
+        }
+
+        .muted {
+            color: #687782;
+            font-size: 13px;
+        }
+
+        .result-card {
+            border: 1px solid #d5dce2;
+            border-radius: 6px;
+            margin-bottom: 18px;
+            overflow: hidden;
+        }
+
+        .result-header {
+            background: #f1f4f6;
+            padding: 14px 18px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sample-id {
+            font-weight: bold;
+            font-size: 16px;
+        }
+
+        .result-body {
+            padding: 18px;
+        }
+
+        .result-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 15px;
+            padding: 10px 0;
+            border-bottom: 1px solid #edf0f2;
+        }
+
+        .result-row:last-child {
+            border-bottom: none;
+        }
+
+        .result-name {
+            font-weight: bold;
+        }
+
+        .result-value {
+            font-size: 16px;
+        }
+
+        .result-de {
+            font-size: 11px;
+            color: #7a8791;
+        }
+
+        .status {
+            display: inline-block;
+            padding: 5px 10px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+
+        .status-VERIFIED {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .status-COMPLETED {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+
+        .status-PROCESSING {
+            background: #fff3cd;
+            color: #856404;
+        }
+
+        .status-COLLECTED {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+
+        .message {
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 15px;
+        }
+
+        .message.error {
+            background: #ffebee;
+            color: #b71c1c;
+        }
+
+        .message.info {
+            background: #e3f2fd;
+            color: #0d47a1;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+        }
+
+        @media(max-width: 700px) {
+
+            .container {
+                padding: 12px;
+            }
+
+            .result-row {
+                grid-template-columns: 1fr;
+                gap: 5px;
+            }
+
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="header">
+    🧪 Laboratory Results
+</div>
+
+<div class="container">
+
+    <div id="message"></div>
+
+    <div id="loading" class="loading">
+        Loading laboratory results...
+    </div>
+
+    <div id="content" class="hidden">
+
+        <!-- Patient information -->
+        <div class="card">
+
+            <div
+                id="patientName"
+                class="patient-name">
+            </div>
+
+            <div id="patientDetails"></div>
+
+        </div>
+
+        <!-- Results -->
+        <div class="card">
+
+            <h2>Laboratory Results</h2>
+
+            <div
+                id="results">
+            </div>
+
+        </div>
+
+    </div>
+
+</div>
+
+
+<script>
+
+/* ================================================================
+   CONFIGURATION
+   ================================================================
+
+   Replace these UIDs with your own.
+
+   ================================================================ */
+
+const CONFIG = {
+
+    programUid:
+        "YOUR_PROGRAM_UID",
+
+    laboratoryStageUid:
+        "YOUR_LABORATORY_STAGE_UID",
+
+
+    /*
+     * Laboratory data elements
+     */
+
+    laboratory: {
+
+        sampleId:
+            "YOUR_SAMPLE_ID_DATA_ELEMENT_UID",
+
+        barcode:
+            "YOUR_BARCODE_DATA_ELEMENT_UID",
+
+        status:
+            "YOUR_STATUS_DATA_ELEMENT_UID",
+
+        sampleType:
+            "YOUR_SAMPLE_TYPE_DATA_ELEMENT_UID",
+
+        /*
+         * This is the data element where the Lab event stores
+         * the OPD event UID.
+         */
+
+        opdEventLink:
+            "YOUR_OPD_EVENT_LINK_DATA_ELEMENT_UID",
+
+
+        /*
+         * Existing laboratory result fields.
+         */
+
+        tests: {
+
+            RBS: {
+                name: "Random Blood Sugar",
+                unit: "mg/dL",
+                dataElement:
+                    "YOUR_RBS_DATA_ELEMENT_UID"
+            },
+
+            CBC: {
+                name: "Complete Blood Count",
+                unit: "",
+                dataElement:
+                    "YOUR_CBC_DATA_ELEMENT_UID"
+            },
+
+            CREAT: {
+                name: "Creatinine",
+                unit: "mg/dL",
+                dataElement:
+                    "YOUR_CREATININE_DATA_ELEMENT_UID"
+            },
+
+            URINE: {
+                name: "Urine Routine Examination",
+                unit: "",
+                dataElement:
+                    "YOUR_URINE_RESULT_DATA_ELEMENT_UID"
+            }
+
+        }
+
+    }
+
+};
+
+
+/* ================================================================
+   QUERY STRING
+   ================================================================ */
+
+const params =
+    new URLSearchParams(
+        window.location.search
+    );
+
+
+const TRACKED_ENTITY =
+    params.get("trackedEntity");
+
+
+const OPD_EVENT =
+    params.get("opdEvent");
+
+
+/*
+ * Optional:
+ *
+ * ?trackedEntity=xxx&opdEvent=yyy
+ *
+ * Both parameters are expected.
+ */
+
+
+/* ================================================================
+   API
+   ================================================================ */
+
+function apiGet(url) {
+
+    return $.ajax({
+
+        url: url,
+
+        method: "GET",
+
+        dataType: "json"
+
+    });
+
+}
+
+
+/* ================================================================
+   HTML ESCAPE
+   ================================================================ */
+
+function escapeHtml(value) {
+
+    if (
+        value === null ||
+        value === undefined
+    ) {
+        return "";
+    }
+
+    return String(value)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+
+}
+
+
+/* ================================================================
+   GET DATA VALUE
+   ================================================================ */
+
+function getDataValue(
+    event,
+    dataElement
+) {
+
+    if (
+        !event ||
+        !event.dataValues
+    ) {
+        return null;
+    }
+
+
+    const found =
+        event.dataValues.find(
+            x =>
+                x.dataElement ===
+                dataElement
+        );
+
+
+    return found
+        ? found.value
+        : null;
+
+}
+
+
+/* ================================================================
+   MESSAGE
+   ================================================================ */
+
+function showError(message) {
+
+    $("#loading")
+        .addClass("hidden");
+
+    $("#message")
+        .html(
+            `<div class="message error">
+                ${escapeHtml(message)}
+            </div>`
+        );
+
+}
+
+
+/* ================================================================
+   LOAD PATIENT
+   ================================================================ */
+
+function loadPatient() {
+
+    return apiGet(
+
+        "/api/tracker/trackedEntities/" +
+        encodeURIComponent(
+            TRACKED_ENTITY
+        ) +
+        "?fields=trackedEntity,attributes"
+
+    );
+
+}
+
+
+/* ================================================================
+   PATIENT NAME
+   ================================================================ */
+
+function getPatientName(
+    tei
+) {
+
+    if (
+        !tei ||
+        !tei.attributes
+    ) {
+        return "Patient";
+    }
+
+
+    /*
+     * Adjust this according to your
+     * tracked entity attributes.
+     */
+
+    const possibleNames = [
+
+        "Patient Name",
+        "Name",
+        "First Name",
+        "First name"
+
+    ];
+
+
+    for (
+        const attribute
+        of tei.attributes
+    ) {
+
+        if (
+
+            possibleNames
+                .includes(
+                    attribute.displayName
+                )
+
+            &&
+
+            attribute.value
+
+        ) {
+
+            return attribute.value;
+
+        }
+
+    }
+
+
+    return "Patient";
+
+}
+
+
+/* ================================================================
+   LOAD LAB EVENTS
+   ================================================================ */
+
+function loadLabEvents() {
+
+    const url =
+
+        "/api/events" +
+
+        "?program=" +
+        encodeURIComponent(
+            CONFIG.programUid
+        ) +
+
+        "&programStage=" +
+        encodeURIComponent(
+            CONFIG.laboratoryStageUid
+        ) +
+
+        "&trackedEntity=" +
+        encodeURIComponent(
+            TRACKED_ENTITY
+        ) +
+
+        "&pageSize=1000" +
+
+        "&fields=event,eventDate," +
+        "trackedEntity,enrollment,orgUnit," +
+        "status,dataValues";
+
+
+    return apiGet(url);
+
+}
+
+
+/* ================================================================
+   FIND RESULTS FOR OPD EVENT
+   ================================================================ */
+
+function findMatchingLabEvents(
+    response
+) {
+
+    const events =
+        response.events || [];
+
+
+    return events.filter(
+        function(event) {
+
+            const linkedOpdEvent =
+                getDataValue(
+
+                    event,
+
+                    CONFIG.laboratory
+                        .opdEventLink
+
+                );
+
+
+            return (
+                linkedOpdEvent ===
+                OPD_EVENT
+            );
+
+        }
+    );
+
+}
+
+
+/* ================================================================
+   RENDER PATIENT
+   ================================================================ */
+
+function renderPatient(
+    tei
+) {
+
+    const name =
+        getPatientName(tei);
+
+
+    $("#patientName")
+        .text(name);
+
+
+    $("#patientDetails")
+        .html(`
+
+            <div class="muted">
+                Patient ID:
+                ${escapeHtml(
+                    TRACKED_ENTITY
+                )}
+            </div>
+
+            <div class="muted">
+                OPD Event:
+                ${escapeHtml(
+                    OPD_EVENT
+                )}
+            </div>
+
+        `);
+
+}
+
+
+/* ================================================================
+   RENDER RESULTS
+   ================================================================ */
+
+function renderResults(
+    events
+) {
+
+    const container =
+        $("#results");
+
+
+    container.empty();
+
+
+    if (!events.length) {
+
+        container.html(`
+
+            <div class="message info">
+                No laboratory results are available
+                for this OPD visit.
+            </div>
+
+        `);
+
+        return;
+
+    }
+
+
+    /*
+     * Latest sample first.
+     */
+
+    events.sort(
+        function(a, b) {
+
+            return new Date(
+                b.eventDate
+            ) -
+
+            new Date(
+                a.eventDate
+            );
+
+        }
+    );
+
+
+    events.forEach(
+        function(event) {
+
+            renderLabEvent(
+                event,
+                container
+            );
+
+        }
+    );
+
+}
+
+
+/* ================================================================
+   RENDER ONE LAB EVENT
+   ================================================================ */
+
+function renderLabEvent(
+    event,
+    container
+) {
+
+    const sampleId =
+        getDataValue(
+
+            event,
+
+            CONFIG.laboratory
+                .sampleId
+
+        );
+
+
+    const barcode =
+        getDataValue(
+
+            event,
+
+            CONFIG.laboratory
+                .barcode
+
+        );
+
+
+    const sampleType =
+        getDataValue(
+
+            event,
+
+            CONFIG.laboratory
+                .sampleType
+
+        );
+
+
+    const status =
+        getDataValue(
+
+            event,
+
+            CONFIG.laboratory
+                .status
+
+        ) || "UNKNOWN";
+
+
+    const card =
+        $(`
+            <div class="result-card">
+
+                <div class="result-header">
+
+                    <div>
+
+                        <div class="sample-id">
+                            Sample:
+                            ${escapeHtml(
+                                sampleId ||
+                                event.event
+                            )}
+                        </div>
+
+                        <div class="muted">
+                            ${escapeHtml(
+                                sampleType || ""
+                            )}
+                        </div>
+
+                    </div>
+
+                    <span
+                        class="status status-${escapeHtml(
+                            status
+                        )}">
+                        ${escapeHtml(status)}
+                    </span>
+
+                </div>
+
+                <div class="result-body">
+
+                    <div class="muted"
+                         style="margin-bottom:15px;">
+
+                        Date:
+                        ${escapeHtml(
+                            event.eventDate ||
+                            ""
+                        )}
+
+                        &nbsp;&nbsp;
+
+                        Event:
+                        ${escapeHtml(
+                            event.event
+                        )}
+
+                    </div>
+
+                    <div class="results-list">
+                    </div>
+
+                </div>
+
+            </div>
+        `);
+
+
+    const resultsList =
+        card.find(
+            ".results-list"
+        );
+
+
+    /*
+     * Display configured laboratory results.
+     */
+
+    let resultCount = 0;
+
+
+    Object.keys(
+        CONFIG.laboratory.tests
+    )
+    .forEach(
+        function(code) {
+
+            const test =
+                CONFIG.laboratory
+                    .tests[code];
+
+
+            const value =
+                getDataValue(
+
+                    event,
+
+                    test.dataElement
+
+                );
+
+
+            /*
+             * Only display values that actually exist.
+             */
+
+            if (
+                value === null ||
+                value === undefined ||
+                value === ""
+            ) {
+                return;
+            }
+
+
+            resultCount++;
+
+
+            const unit =
+                test.unit
+                    ? " " +
+                      escapeHtml(
+                          test.unit
+                      )
+                    : "";
+
+
+            resultsList.append(`
+
+                <div class="result-row">
+
+                    <div class="result-name">
+                        ${escapeHtml(
+                            test.name
+                        )}
+                    </div>
+
+                    <div class="result-value">
+
+                        ${escapeHtml(
+                            value
+                        )}
+
+                        ${unit}
+
+                    </div>
+
+                    <div class="result-de">
+                        ${escapeHtml(
+                            code
+                        )}
+                    </div>
+
+                </div>
+
+            `);
+
+        }
+    );
+
+
+    if (!resultCount) {
+
+        resultsList.html(`
+
+            <div class="message info">
+                No results have been entered
+                for this sample yet.
+            </div>
+
+        `);
+
+    }
+
+
+    container.append(card);
+
+}
+
+
+/* ================================================================
+   INITIALIZE
+   ================================================================ */
+
+function initialize() {
+
+
+    /*
+     * Validate required parameters.
+     */
+
+    if (!TRACKED_ENTITY) {
+
+        showError(
+            "Missing required parameter: trackedEntity"
+        );
+
+        return;
+
+    }
+
+
+    if (!OPD_EVENT) {
+
+        showError(
+            "Missing required parameter: opdEvent"
+        );
+
+        return;
+
+    }
+
+
+    /*
+     * Load patient and laboratory events.
+     */
+
+    $.when(
+
+        loadPatient(),
+
+        loadLabEvents()
+
+    )
+
+    .done(
+        function(
+            patientResponse,
+            labResponse
+        ) {
+
+            const patient =
+                patientResponse[0];
+
+
+            const labEvents =
+                findMatchingLabEvents(
+                    labResponse[0]
+                );
+
+
+            renderPatient(
+                patient
+            );
+
+
+            renderResults(
+                labEvents
+            );
+
+
+            $("#loading")
+                .addClass("hidden");
+
+
+            $("#content")
+                .removeClass("hidden");
+
+        }
+    )
+
+    .fail(
+        function(xhr) {
+
+            console.error(
+                xhr
+            );
+
+            showError(
+                "Unable to load laboratory results."
+            );
+
+        }
+    );
+
+}
+
+
+/* ================================================================
+   START
+   ================================================================ */
+
+$(document).ready(
+    initialize
+);
+
+</script>
+
+</body>
+</html>
