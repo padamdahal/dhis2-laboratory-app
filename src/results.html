@@ -3,12 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-
     <title>Laboratory Results</title>
-
-    <!-- For production DHIS2 app, bundle jQuery locally -->
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
-
     <style>
         * {
             box-sizing: border-box;
@@ -175,42 +171,26 @@
 </div>
 
 <div class="container">
-
     <div id="message"></div>
-
     <div id="loading" class="loading">
         Loading laboratory results...
     </div>
-
     <div id="content" class="hidden">
-
-        <!-- Patient information -->
         <div class="card">
-
             <div
                 id="patientName"
                 class="patient-name">
             </div>
-
             <div id="patientDetails"></div>
-
         </div>
-
-        <!-- Results -->
         <div class="card">
-
             <h2>Laboratory Results</h2>
-
             <div
                 id="results">
             </div>
-
         </div>
-
     </div>
-
 </div>
-
 
 <script>
 
@@ -224,38 +204,15 @@
 
 const CONFIG = {
 
-    programUid:
-        "YOUR_PROGRAM_UID",
-
-    laboratoryStageUid:
-        "YOUR_LABORATORY_STAGE_UID",
-
-
-    /*
-     * Laboratory data elements
-     */
-
+    programUid: "YOUR_PROGRAM_UID",
+    laboratoryStageUid: "YOUR_LABORATORY_STAGE_UID",
     laboratory: {
-
-        sampleId:
-            "YOUR_SAMPLE_ID_DATA_ELEMENT_UID",
-
-        barcode:
-            "YOUR_BARCODE_DATA_ELEMENT_UID",
-
-        status:
-            "YOUR_STATUS_DATA_ELEMENT_UID",
-
-        sampleType:
-            "YOUR_SAMPLE_TYPE_DATA_ELEMENT_UID",
-
-        /*
-         * This is the data element where the Lab event stores
-         * the OPD event UID.
-         */
-
-        opdEventLink:
-            "YOUR_OPD_EVENT_LINK_DATA_ELEMENT_UID",
+        sampleId: "YOUR_SAMPLE_ID_DATA_ELEMENT_UID",
+        barcode: "YOUR_BARCODE_DATA_ELEMENT_UID",
+        status: "YOUR_STATUS_DATA_ELEMENT_UID",
+        sampleType: "YOUR_SAMPLE_TYPE_DATA_ELEMENT_UID",
+        // This is the data element where the Lab event stores the OPD event UID.
+        opdEventLink: "YOUR_OPD_EVENT_LINK_DATA_ELEMENT_UID",
 
 
         /*

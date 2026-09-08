@@ -159,6 +159,7 @@ table{width:100%;border-collapse:collapse}
 th,td{text-align:left;padding:12px 11px;border-bottom:1px solid var(--border);vertical-align:top}
 th{background:#f5f8f8;font-size:11.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft);font-weight:700}
 tbody tr:hover{background:#f9fbfb}
+.row-actions{display:flex;gap:6px;flex-wrap:wrap}
 .mono{font-family:var(--font-mono)}
 .muted{color:var(--ink-soft)}
 .small{font-size:12px;color:var(--ink-soft)}
@@ -210,6 +211,23 @@ tbody tr:hover{background:#f9fbfb}
 .test-box{border:1px solid var(--border);padding:13px 14px;margin:0 0 10px;border-radius:var(--radius-sm)}
 .test-box:last-child{margin-bottom:0}
 .test-title{font-weight:700;margin-bottom:8px;font-size:13.5px}
+
+/* Compact tile grids for "Ordered investigations" and "Samples for this
+   order" - these lists are reference/summary views (not places results get
+   entered, unlike .test-box), so they can be dense: small blocks instead of
+   one full-width row per item. */
+#requestedTests, #samplesList{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+#requestedTests .empty, #samplesList .empty{grid-column:1/-1}
+.test-tile{border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;font-size:12.5px}
+.test-tile .name{font-weight:700;font-size:12.5px;line-height:1.3}
+.test-tile .meta{font-size:10.5px;color:var(--ink-soft);margin-top:2px}
+.sample-tile{border:1px solid var(--border);border-radius:var(--radius-sm);padding:9px 11px;font-size:12px}
+.sample-tile .top{display:flex;justify-content:space-between;align-items:center;gap:6px;margin-bottom:5px}
+.sample-tile .sid{font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);margin-bottom:4px}
+.sample-tile .tests{font-size:11.5px;color:var(--ink)}
+.test-group-label{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft);font-weight:700;margin:10px 0 4px}
+.test-group-label:first-child{margin-top:0}
+
 .result-row{display:grid;grid-template-columns:1.5fr 1fr .5fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f1}
 .result-row:first-child{border-top:0}
 .result-row label{font-weight:500;font-size:13px;color:var(--ink);margin:0}
@@ -366,7 +384,11 @@ tbody tr:hover{background:#f9fbfb}
             <button class="btn-primary" id="createLabEventBtn">Collect sample</button>
           </div>
         </div>
-        <div class="card"><h2 class="section-title">Samples for this order</h2><div id="samplesList"></div></div>
+        <div class="card">
+          <h2 class="section-title">Samples for this order</h2>
+          <div id="samplesList"></div>
+          <div class="actions"><button class="btn-secondary hidden" id="printAllLabelsBtn">Print all labels</button></div>
+        </div>
       </div>
 
       <div id="tab-results" class="tab-content"><div class="card"><h2 class="section-title">Result entry</h2><div id="resultSamples"></div></div></div>
@@ -399,13 +421,18 @@ tbody tr:hover{background:#f9fbfb}
         <div id="directSelectedPatient" class="hidden"></div>
         <div id="directTestSelection" class="hidden">
           <div class="field"><label>Tests to order</label><div id="directTestOptions"></div></div>
+          <div class="grid">
+            <div class="field"><label for="directSampleType">Sample type</label><select id="directSampleType"></select></div>
+            <div class="field"><label for="directSampleId">Sample ID</label><input id="directSampleId" readonly placeholder="Not generated yet"></div>
+          </div>
+          <div id="directBarcodeArea" class="barcode-area hidden"><div class="small">Barcode</div><div id="directBarcodeText" class="barcode"></div></div>
           <div class="actions">
-            <button class="btn-primary" id="createDirectOrderBtn">Create order &amp; continue</button>
+            <button class="btn-secondary" id="directGenerateSampleBtn">Generate sample ID</button>
+            <button class="btn-primary" id="createDirectOrderBtn">Register sample</button>
           </div>
         </div>
       </div>
     </div>
-
   </div>
 </div>
 
@@ -437,10 +464,16 @@ tbody tr:hover{background:#f9fbfb}
       — this is what lets OPD *and* any other stage (emergency, ANC, IPD, ...)
       request laboratory tests without extra configuration.
    2. Opening an order lets the lab technician collect one or more samples. Each
-      sample becomes its own draft event in the laboratory stage
-      (CONFIG.laboratoryStageUid), carrying: sample id, barcode, sample type, the
-      subset of tests included in that sample (CONFIG.dataElements.labOrders) and a
-      link back to the originating event (CONFIG.dataElements.opdEvent).
+      sample becomes its own event in the laboratory stage (CONFIG.laboratoryStageUid),
+      carrying: sample id, sample type, the subset of tests included in that sample
+      (CONFIG.dataElements.labOrders) and a link back to the originating event
+      (CONFIG.dataElements.opdEvent).
+   2b. Walk-in/direct tests (registered from this app, not from another stage) skip
+      step 1 entirely — there's no separate order event. The first sample created
+      for the visit IS the order: same laboratory-stage event as any other sample,
+      just with no opdEvent link. The worklist treats a lab-stage event with a
+      sample id and no opdEvent as its own row. See "Direct sample registration"
+      below and loadWorklist()'s standalone-sample handling.
    3. Result entry writes result values directly onto the sample's dataValues,
       using the result data elements configured per test
       (CONFIG.tests[code].resultDataElement).
@@ -489,17 +522,50 @@ const state = {
 };
 
 /* ============================== API layer ============================== */
-function apiPath(path){ return path.startsWith("http") ? path : API_BASE.replace(/\/$/, "") + "/" + path.replace(/^\//, ""); }
-function apiGet(path){ return $.ajax({ url: apiPath(path), method: "GET", dataType: "json" }); }
-function apiPost(path, data){ return $.ajax({ url: apiPath(path), method: "POST", contentType: "application/json", data: JSON.stringify(data), dataType: "json" }); }
+function apiPath(path){ 
+    return path.startsWith("http") ? path : API_BASE.replace(/\/$/, "") + "/" + path.replace(/^\//, ""); 
+}
+    
+function apiGet(path){ 
+    return $.ajax({ 
+        url: apiPath(path), 
+        method: "GET", 
+        dataType: "json" 
+    }); 
+}
+    
+function apiPost(path, data){
+    return $.ajax({ 
+        url: apiPath(path), 
+        method: "POST", 
+        contentType: "application/json", 
+        data: JSON.stringify(data), 
+        dataType: "json"
+    });
+}
 
-/* The DHIS2 tracker import endpoint only accepts POST — there is no PUT.
+/* The DHIS2 tracker import endpoint only accepts POST, 
    importStrategy tells it whether events must already exist:
      CREATE  - new sample events (collection)
-     UPDATE  - existing events being edited (results, status changes)
-   Every write in the app goes through this one helper. */
+     UPDATE  - existing events being edited (results, status changes)*/
 function postTracker(events, importStrategy){
     return apiPost("/tracker?async=false&importStrategy=" + (importStrategy || "CREATE_AND_UPDATE"), { events: events });
+}
+
+/* Pulls the actual validation message out of a failed tracker import
+   response (e.g. "Data element X is not a valid data element for program
+   stage Y") instead of showing a generic "unable to save" toast. Import
+   validation errors are the most common failure mode here - usually a data
+   element that hasn't been assigned to the program stage being written to -
+   and the specific message is exactly what's needed to fix the config. */
+function trackerErrorMessage(xhr, fallback){
+    try {
+        const body = xhr.responseJSON || JSON.parse(xhr.responseText);
+        const reports = body && body.validationReport && body.validationReport.errorReports;
+        if (reports && reports.length) return reports.slice(0, 2).map(function(r){ return r.message; }).join(" — ");
+        if (body && body.message) return body.message;
+    } catch (e) { /* response wasn't the JSON shape we expected - fall through */ }
+    return fallback;
 }
 
 /* Pages through /tracker/events for the configured program, one
@@ -510,18 +576,31 @@ function postTracker(events, importStrategy){
    pages - bounded, rather than relying on pageSize alone to do that job. */
 function fetchAllEvents(options){
     options = options || {};
-    const fields = "event,eventDate,programStage,trackedEntity,enrollment,orgUnit,status,dataValues";
+    const fields = "event,occurredAt,programStage,trackedEntity,enrollment,orgUnit,status,dataValues";
     let all = [];
+    
     function nextPage(page){
         let url = "/tracker/events?program=" + encodeURIComponent(CONFIG.programUid) +
                   "&pageSize=" + NETWORK_PAGE_SIZE + "&page=" + page + "&fields=" + fields;
-        if (options.programStage) url += "&programStage=" + encodeURIComponent(options.programStage);
-        if (options.occurredAfter) url += "&occurredAfter=" + encodeURIComponent(options.occurredAfter);
-        if (SCOPE_ORG_UNIT){ url += "&orgUnit=" + encodeURIComponent(SCOPE_ORG_UNIT) + "&ouMode=" + SCOPE_OU_MODE; }
+        if (options.programStage){
+            url += "&programStage=" + encodeURIComponent(options.programStage);
+        }
+        
+        if (options.occurredAfter) {
+            url += "&occurredAfter=" + encodeURIComponent(options.occurredAfter);
+        }
+        
+        if (SCOPE_ORG_UNIT){ 
+            url += "&orgUnit=" + encodeURIComponent(SCOPE_ORG_UNIT) + "&ouMode=" + SCOPE_OU_MODE; 
+        }
+        
         return apiGet(url).then(function(r){
             const events = r.events || r.instances || [];
             all = all.concat(events);
-            if (events.length === NETWORK_PAGE_SIZE) return nextPage(page + 1);
+            
+            if (events.length === NETWORK_PAGE_SIZE){
+                return nextPage(page + 1);
+            }
             return all;
         });
     }
@@ -549,31 +628,110 @@ function resolveOrgUnitScope(){
 }
 
 /* ============================== Utilities ============================== */
-function escapeHtml(v){ return v == null ? "" : String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;"); }
-function todayIso(){ const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); }
-function todayCompact(){ return todayIso().replace(/-/g, ""); }
-function dataValue(de, value){ return { dataElement: de, value: value == null ? "" : String(value) }; }
-function getDataValue(event, de){ if (!event || !event.dataValues) return null; const x = event.dataValues.find(function(v){ return v.dataElement === de; }); return x ? x.value : null; }
-function setDataValue(values, de, v){ const existing = values.find(function(a){ return a.dataElement === de; }); if (existing) existing.value = String(v == null ? "" : v); else values.push(dataValue(de, v)); }
-function getByPath(obj, path){ return path.split(".").reduce(function(o,k){ return (o && o[k] !== undefined) ? o[k] : undefined; }, obj); }
-function sampleTypeName(code){ const x = (CONFIG.sampleTypes||[]).find(function(s){ return s.code === code; }); return x ? x.name : (code || "Unknown"); }
-function testName(code){ return (CONFIG.tests && CONFIG.tests[code]) ? CONFIG.tests[code].name : code; }
-function stageName(uid){ return (CONFIG.stageNames && CONFIG.stageNames[uid]) || uid; }
-function resultDEsForTest(code){ const t = CONFIG.tests[code]; if (!t) return []; return Array.isArray(t.resultDataElement) ? t.resultDataElement : [t.resultDataElement]; }
+function escapeHtml(v){ 
+    return v == null ? "" : String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+}
+    
+function todayIso(){
+    const d = new Date(); 
+    return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); 
+}
+    
+function todayCompact(){
+    return todayIso().replace(/-/g, ""); 
+}
+    
+function dataValue(de, value){
+    return { dataElement: de, value: value == null ? "" : String(value) };
+}
+    
+function getDataValue(event, de){
+    if (!event || !event.dataValues) 
+        return null; 
+    const x = event.dataValues.find(function(v){
+        return v.dataElement === de; 
+    }); 
+    return x ? x.value : null; 
+}
+    
+function setDataValue(values, de, v){
+    const existing = values.find(function(a){
+        return a.dataElement === de; 
+    }); 
+    
+    if (existing) 
+        existing.value = String(v == null ? "" : v); else values.push(dataValue(de, v)); 
+}
+    
+function getByPath(obj, path){
+    return path.split(".").reduce(function(o,k){
+        return (o && o[k] !== undefined) ? o[k] : undefined; 
+    }, obj); 
+}
+    
+function sampleTypeName(code){ 
+    const x = (CONFIG.sampleTypes||[]).find(function(s){
+        return s.code === code; 
+    }); 
+    return x ? x.name : (code || "Unknown");
+}
+    
+function testName(code){ 
+    return (CONFIG.tests && CONFIG.tests[code]) ? CONFIG.tests[code].name : code; 
+}
+    
+function stageName(uid){ 
+    return (CONFIG.stageNames && CONFIG.stageNames[uid]) || uid; 
+}
+    
+function resultDEsForTest(code){ 
+    const t = CONFIG.tests[code]; 
+    if (!t) 
+        return []; 
+    return Array.isArray(t.resultDataElement) ? t.resultDataElement : [t.resultDataElement]; 
+}
 
 /* Accepts array, object-map, JSON string or delimited string and always
    returns a clean array of test codes. */
 function parseLabOrders(value){
-    if (!value) return [];
-    if (Array.isArray(value)) return value.map(String);
-    if (typeof value === "object") return Object.keys(value).filter(function(k){ return value[k] === true; });
+    if (!value){
+        return [];
+    }
+    
+    if (Array.isArray(value)){ 
+        return value.map(String);
+    }
+    
+    if (typeof value === "object") {
+        return Object.keys(value).filter(function(k){
+            return value[k] === true; 
+        });
+    }
+    
     let s = String(value).trim();
-    if (!s) return [];
-    try { const p = JSON.parse(s); if (Array.isArray(p)) return p.map(String); } catch (e) { /* not JSON, fall through */ }
-    return s.replace(/^\[/, "").replace(/\]$/, "").replace(/["']/g, "").split(/[,;|]/).map(function(x){ return x.trim(); }).filter(Boolean);
+    
+    if (!s){
+        return [];
+    }
+    try { 
+        const p = JSON.parse(s); 
+        if (Array.isArray(p)) 
+            return p.map(String); 
+    } catch (e) { /* not JSON, fall through */ }
+        return s.replace(/^\[/, "").replace(/\]$/, "").replace(/["']/g, "").split(/[,;|]/).map(function(x){
+            return x.trim(); 
+        }).filter(Boolean);
 }
-function getOrderedTests(sourceEvent){ return parseLabOrders(getDataValue(sourceEvent, CONFIG.dataElements.orders)); }
-function getSampleTests(sampleEvent){ return parseLabOrders(getDataValue(sampleEvent, CONFIG.dataElements.labOrders)); }
+/* Tests requested on a source (order) event, read from dataElements.orders
+   (the OPD multi-select). Walk-in/direct tests don't produce one of these
+   at all - see loadWorklist()'s handling of "standalone" samples below. */
+function getOrderedTests(sourceEvent){
+    return parseLabOrders(getDataValue(sourceEvent, CONFIG.dataElements.orders)); 
+}
+    
+function getSampleTests(sampleEvent){ 
+    return parseLabOrders(getDataValue(sampleEvent, CONFIG.dataElements.labOrders)); 
+}
 
 function generateSampleId(){
     const cfg = CONFIG.sampleId || {};
@@ -583,7 +741,10 @@ function generateSampleId(){
     const prefix = cfg.prefix || "LAB";
     return prefix + sep + todayCompact() + sep + n;
 }
-function barcodeText(value){ return "*" + value + "*"; }
+    
+function barcodeText(value){ 
+    return "*" + value + "*"; 
+}
 
 /* DHIS2-style client-generated UID: 11 chars, first a letter, the rest
    alphanumeric. Used when this app creates a tracker event itself (direct/
@@ -606,13 +767,18 @@ function generateUid(){
    group descriptions. */
 function parseTokens(str){
     const out = {};
-    if (!str) return out;
+    if (!str) {
+        return out;
+    }
+    
     String(str).split(",").forEach(function(pair){
         const idx = pair.indexOf(":");
-        if (idx === -1) return;
+        if (idx === -1) 
+            return;
         const key = pair.slice(0, idx).trim().toUpperCase();
         const val = pair.slice(idx + 1).trim();
-        if (key) out[key] = val;
+        if (key) 
+            out[key] = val;
     });
     return out;
 }
@@ -625,6 +791,7 @@ function parseRangeBounds(range){
     if (!m) return null;
     return { low: parseFloat(m[1]), high: parseFloat(m[2]) };
 }
+    
 function isOutOfRange(value, range){
     const bounds = parseRangeBounds(range);
     if (!bounds) return false;
@@ -641,9 +808,16 @@ function toast(message, type){
     $t.find(".toast-msg").text(message);
     $("#toastRegion").append($t);
     requestAnimationFrame(function(){ $t.addClass("show"); });
-    setTimeout(function(){ $t.removeClass("show"); setTimeout(function(){ $t.remove(); }, 200); }, 4500);
+    setTimeout(function(){
+        $t.removeClass("show"); 
+        setTimeout(function(){ $t.remove(); }, 200); 
+    }, 4500);
 }
-function fatalError(message){ $("#loading").addClass("hidden"); $("#fatalError").removeClass("hidden").html(message); }
+    
+function fatalError(message){ 
+    $("#loading").addClass("hidden"); 
+    $("#fatalError").removeClass("hidden").html(message); 
+}
 
 /* Returns a Promise<boolean> resolved true if the person confirms. Used for
    verification actions, where locking in the wrong result has real
@@ -656,13 +830,17 @@ function confirmAction(opts){
         $("#confirmMessage").text(opts.message);
         const $btn = $("#confirmActionBtn").attr("class", "btn-sm " + (opts.tone === "danger" ? "btn-danger" : "btn-success")).text(opts.confirmLabel || "Confirm");
         $overlay.removeClass("hidden");
-        requestAnimationFrame(function(){ $overlay.addClass("show"); });
+        requestAnimationFrame(function(){ 
+            $overlay.addClass("show"); 
+        });
+        
         function close(result){
             $overlay.removeClass("show");
             setTimeout(function(){ $overlay.addClass("hidden"); }, 150);
             $btn.off("click"); $("#confirmCancelBtn").off("click");
             resolve(result);
         }
+        
         $btn.on("click", function(){ close(true); });
         $("#confirmCancelBtn").on("click", function(){ close(false); });
     });
@@ -672,13 +850,17 @@ function confirmAction(opts){
 /* Small, reused template fragments — kept in one place so the worklist,
    samples list, result entry and verification screens can't drift into
    subtly different markup for the same concept. */
-function tplStatusChip(status){ return '<span class="status-chip status-' + escapeHtml(status||"ORDERED") + '"><span class="dot"></span>' + escapeHtml(status||"ORDERED") + '</span>'; }
+function tplStatusChip(status){ 
+    return '<span class="status-chip status-' + escapeHtml(status||"ORDERED") + '"><span class="dot"></span>' + escapeHtml(status||"ORDERED") + '</span>'; 
+}
+    
 function tplSampleHeader(sample){
     const sid = getDataValue(sample, CONFIG.dataElements.sampleId) || sample.event;
     const status = getDataValue(sample, CONFIG.dataElements.status) || "COLLECTED";
     const type = sampleTypeName(getDataValue(sample, CONFIG.dataElements.sampleType));
     return '<div class="sample-header"><div><strong>' + escapeHtml(type) + '</strong><div class="sid">' + escapeHtml(sid) + '</div></div>' + tplStatusChip(status) + '</div>';
 }
+    
 function tplResultRow(deUid, value, editable, sampleEvent){
     const meta = (CONFIG.resultDataElements && CONFIG.resultDataElements[deUid]) || { name: deUid, unit: "", range: "" };
     const unitRange = [meta.unit, meta.range ? ("Ref " + meta.range) : ""].filter(Boolean).join(" · ");
@@ -698,6 +880,7 @@ function validateConfig(c){
     const missing = REQUIRED_CONFIG_KEYS.filter(function(path){ return getByPath(c, path) === undefined; });
     return missing;
 }
+    
 function loadConfig(){
     return $.ajax({ url: DATASTORE_URL, method: "GET", dataType: "json" }).then(function(c){
         const missing = validateConfig(c);
@@ -708,6 +891,7 @@ function loadConfig(){
         API_BASE = (c.apiBaseUrl || "/api").replace(/\/$/, "");
     });
 }
+
 function loadStageNames(){
     return apiGet("/programStages?filter=program.id:eq:" + encodeURIComponent(CONFIG.programUid) + "&fields=id,name&paging=false")
         .then(function(r){ CONFIG.stageNames = {}; (r.programStages||[]).forEach(function(s){ CONFIG.stageNames[s.id] = s.name; }); })
@@ -757,6 +941,7 @@ function loadTestMetadata(){
             toast("Couldn't load the test catalog — check testGroupSetUid in the laboratory config.", "error");
         });
 }
+    
 function loadCurrentUser(){
     return apiGet("/me.json?fields=username,displayName,organisationUnits[id,name]")
         .then(function(u){ CURRENT_USER = u; $("#currentUserLabel").text(u.displayName || u.username || ""); })
@@ -775,27 +960,40 @@ function loadWorklist(){
     $("#worklistLoading").removeClass("hidden");
     const cutoff = lookbackCutoffIso();
     fetchAllEvents({ occurredAfter: cutoff }).then(function(allEvents){
-        // A sample event links back to its order via opdEvent; an order/request
-        // event carries the `orders` selection instead. Classifying by which
-        // field is populated - rather than by program stage - is what lets a
-        // walk-in order and its samples share the same stage (the lab stage
-        // itself, see directOrderStageUid) without one being mistaken for the
-        // other.
-        const sampleEvents = allEvents.filter(function(e){ return !!getDataValue(e, CONFIG.dataElements.opdEvent); });
-        const orderEvents = allEvents.filter(function(e){ return getOrderedTests(e).length > 0; });
+        const labStageEvents = allEvents.filter(function(e){ return e.programStage === CONFIG.laboratoryStageUid; });
+        const otherStageEvents = allEvents.filter(function(e){ return e.programStage !== CONFIG.laboratoryStageUid; });
 
+        // A "sample" is any lab-stage event that actually represents
+        // collected material (it has a sample id) - as opposed to an event
+        // that's only there to hold a link, which shouldn't happen but is
+        // guarded against anyway.
+        const allSamples = labStageEvents.filter(function(e){ return !!getDataValue(e, CONFIG.dataElements.sampleId); });
+        // Linked samples reference an order event living elsewhere (OPD, any
+        // other stage) via opdEvent. Standalone samples have no opdEvent at
+        // all - they're walk-in registrations that ARE their own order (see
+        // createDirectSample()). Both kinds can still gain further linked
+        // samples later (e.g. a second sample type for the same visit),
+        // grouped the same way either case.
         const samplesByOrder = {};
-        sampleEvents.forEach(function(s){
+        allSamples.forEach(function(s){
             const link = getDataValue(s, CONFIG.dataElements.opdEvent);
+            if (!link) return;
             (samplesByOrder[link] = samplesByOrder[link] || []).push(s);
         });
+        const standaloneSamples = allSamples.filter(function(s){ return !getDataValue(s, CONFIG.dataElements.opdEvent); });
 
-        state.worklist = orderEvents.map(function(e){
+        const orderEvents = otherStageEvents.filter(function(e){ return getOrderedTests(e).length > 0; });
+        const fromOrders = orderEvents.map(function(e){
             const tests = getOrderedTests(e);
             const samples = samplesByOrder[e.event] || [];
             return { sourceEvent: e, tests: tests, samples: samples, status: deriveOrderStatus(samples), patientName: null, patientId: null };
         });
+        const fromStandaloneSamples = standaloneSamples.map(function(root){
+            const samples = [root].concat(samplesByOrder[root.event] || []);
+            return { sourceEvent: root, tests: getSampleTests(root), samples: samples, status: deriveOrderStatus(samples), patientName: null, patientId: null };
+        });
 
+        state.worklist = fromOrders.concat(fromStandaloneSamples);
         state.worklistPage = 1;
         renderStatStrip();
         renderWorklist();
@@ -906,13 +1104,15 @@ function renderWorklist(){
         tr.append($("<td>").html(escapeHtml(stageName(e.programStage)) + "<div class='small mono'>" + escapeHtml(e.event) + "</div>"));
         tr.append($("<td>").html(names.map(escapeHtml).join("<br>")));
         tr.append($("<td>").html(sampleSummary));
-        tr.append($("<td>").text(e.eventDate || ""));
+        tr.append($("<td>").text(e.occurredAt || ""));
         tr.append($("<td>").html(tplStatusChip(item.status)));
-        const $actions = $("<td>").css({ display: "flex", gap: "6px" });
-        $actions.append($("<button>").addClass("btn-primary btn-sm").text("Open").on("click", function(){ openOrder(e.event); }));
+        const $actions = $("<td>");
+        const $actionsWrap = $("<div>").addClass("row-actions");
+        $actionsWrap.append($("<button>").addClass("btn-primary btn-sm").text("Open").on("click", function(){ openOrder(e.event); }));
         if (item.status === "VERIFIED"){
-            $actions.append($("<button>").addClass("btn-secondary btn-sm").text("Print").on("click", function(){ printReportForWorklistItem(item); }));
+            $actionsWrap.append($("<button>").addClass("btn-secondary btn-sm").text("Print").on("click", function(){ printReportForWorklistItem(item); }));
         }
+        $actions.append($actionsWrap);
         tr.append($actions);
         tbody.append(tr);
 
@@ -983,7 +1183,7 @@ function renderPatientInformation(){
         (disp.age !== "" ? ' &nbsp;·&nbsp; ' + escapeHtml(disp.age) + ' yrs' : '') +
         (disp.sex ? ' &nbsp;·&nbsp; ' + escapeHtml(disp.sex) : '') +
         ' &nbsp;·&nbsp; Ordered from <strong>' + escapeHtml(stageName(item.sourceEvent.programStage)) + '</strong>' +
-        ' &nbsp;·&nbsp; ' + escapeHtml(item.sourceEvent.eventDate || "") + '</div>'
+        ' &nbsp;·&nbsp; ' + escapeHtml(item.sourceEvent.occurredAt || "") + '</div>'
     );
 }
 
@@ -1015,17 +1215,19 @@ function renderTabCounts(){
 
 function renderRequestedTests(){
     const c = $("#requestedTests").empty();
+    if (!state.currentOrder.tests.length){ c.html("<div class='empty'>No tests recorded on this order.</div>"); return; }
     state.currentOrder.tests.forEach(function(code){
         const t = CONFIG.tests[code];
         c.append(
-            '<div class="test-box"><div class="test-title">' + escapeHtml(t ? t.name : code) + '</div>' +
-            '<div class="small">Code: <span class="mono">' + escapeHtml(code) + '</span>' + (t && t.sampleType ? " · Suggested sample: " + escapeHtml(sampleTypeName(t.sampleType)) : "") + '</div></div>'
+            '<div class="test-tile"><div class="name">' + escapeHtml(t ? t.name : code) + '</div>' +
+            (t && t.sampleType ? '<div class="meta">' + escapeHtml(sampleTypeName(t.sampleType)) + '</div>' : '') +
+            '</div>'
         );
     });
 }
 
-function setupSampleTypes(){
-    const s = $("#sampleType").empty();
+function setupSampleTypes(selector){
+    const s = $(selector || "#sampleType").empty();
     (CONFIG.sampleTypes || []).forEach(function(t){ s.append($("<option>").val(t.code).text(t.name)); });
 }
 
@@ -1037,13 +1239,17 @@ function collectedTestSet(){
 }
 
 function resetSampleForm(){
-    $("#sampleId").val("");
-    $("#barcodeArea").addClass("hidden");
     $("#createLabEventBtn").prop("disabled", false).text("Collect sample");
+    generateSample(); // auto-fill sample id + barcode preview; "Generate sample ID" button can still regenerate
 
     const collected = collectedTestSet();
+    const orderedSet = new Set(state.currentOrder.tests);
+    const additionalCodes = Object.keys(CONFIG.tests || {})
+        .filter(function(code){ return !orderedSet.has(code); })
+        .sort(function(a, b){ return testName(a).localeCompare(testName(b)); });
+
     const c = $("#sampleTests").empty();
-    state.currentOrder.tests.forEach(function(code){
+    function renderCheckbox(code){
         const t = CONFIG.tests[code];
         const id = "sample_test_" + code;
         const already = collected.has(code);
@@ -1052,19 +1258,36 @@ function resetSampleForm(){
             '<input type="checkbox" id="' + escapeHtml(id) + '" value="' + escapeHtml(code) + '"' + (already ? " disabled" : "") + '>' +
             '<label for="' + escapeHtml(id) + '" style="margin:0;font-weight:400">' + escapeHtml(t ? t.name : code) + (already ? ' <span class="pill">already sampled</span>' : "") + '</label></div>'
         );
-    });
+    }
+    if (state.currentOrder.tests.length){
+        c.append('<div class="test-group-label">Ordered</div>');
+        state.currentOrder.tests.forEach(renderCheckbox);
+    }
+    if (additionalCodes.length){
+        // Lets the tech add a test the patient wants beyond what was
+        // originally ordered (e.g. a walk-in sugar test alongside an
+        // OPD-ordered DC) - it just becomes part of this sample's own test
+        // list, same as any other test.
+        c.append('<div class="test-group-label">Add another test</div>');
+        additionalCodes.forEach(renderCheckbox);
+    }
 }
 
 function renderSamples(){
     const c = $("#samplesList").empty();
+    $("#printAllLabelsBtn").toggleClass("hidden", !state.currentOrder.samples.length);
     if (!state.currentOrder.samples.length){ c.html("<div class='empty'>No samples have been collected for this order yet.</div>"); return; }
     state.currentOrder.samples.forEach(function(sample){
         const tests = getSampleTests(sample);
         const sid = getDataValue(sample, CONFIG.dataElements.sampleId) || sample.event;
+        const status = getDataValue(sample, CONFIG.dataElements.status) || "COLLECTED";
+        const type = sampleTypeName(getDataValue(sample, CONFIG.dataElements.sampleType));
         c.append(
-            '<div class="sample-card">' + tplSampleHeader(sample) +
-            '<div class="sample-body"><div><strong>Tests:</strong> ' + tests.map(testName).map(escapeHtml).join(", ") + '</div>' +
-            '<div class="small mono" style="margin-top:6px">Barcode: ' + escapeHtml(barcodeText(sid)) + '</div></div></div>'
+            '<div class="sample-tile">' +
+            '<div class="top"><strong>' + escapeHtml(type) + '</strong>' + tplStatusChip(status) + '</div>' +
+            '<div class="sid">' + escapeHtml(sid) + '</div>' +
+            '<div class="tests">' + tests.map(testName).map(escapeHtml).join(", ") + '</div>' +
+            '</div>'
         );
     });
 }
@@ -1111,24 +1334,39 @@ function createLabEvent(){
     $("#createLabEventBtn").prop("disabled", true).text("Collecting…");
     postTracker([newSample], "CREATE")
         .done(function(){ toast("Sample collected.", "success"); refreshOrderData(); resetSampleForm(); })
-        .fail(function(xhr){ console.error(xhr); toast("Unable to create the laboratory sample.", "error"); })
+        .fail(function(xhr){ console.error(xhr); toast(trackerErrorMessage(xhr, "Unable to create the laboratory sample."), "error"); })
         .always(function(){ state.creating = false; $("#createLabEventBtn").prop("disabled", false).text("Collect sample"); });
 }
 
-/* Re-fetches only the laboratory-stage samples linked to the current order
-   and refreshes every tab that depends on them. */
+/* Re-fetches the laboratory-stage samples linked to the current order and
+   refreshes every tab that depends on them. When the order is itself a
+   standalone walk-in sample (see loadWorklist()), that root event is
+   re-fetched too and kept as the first entry in `samples` - it never has an
+   opdEvent value pointing at itself, so the normal opdEvent-match filter
+   alone would otherwise drop it after every refresh. */
 function refreshOrderData(){
     const order = state.currentOrder.sourceEvent;
+    const isStandaloneRoot = !getDataValue(order, CONFIG.dataElements.opdEvent) && !!getDataValue(order, CONFIG.dataElements.sampleId);
     const url = "/tracker/events?program=" + encodeURIComponent(CONFIG.programUid) +
         "&programStage=" + encodeURIComponent(CONFIG.laboratoryStageUid) +
         "&trackedEntity=" + encodeURIComponent(order.trackedEntity) +
-        "&pageSize=200&fields=event,eventDate,programStage,trackedEntity,enrollment,orgUnit,status,dataValues";
+        "&pageSize=200&fields=event,occurredAt,programStage,trackedEntity,enrollment,orgUnit,status,dataValues";
     apiGet(url).done(function(r){
-        state.currentOrder.samples = (r.events || []).filter(function(e){ return getDataValue(e, CONFIG.dataElements.opdEvent) === order.event; });
-        state.currentOrder.status = deriveOrderStatus(state.currentOrder.samples);
+        const events = r.events || [];
+        let samples = events.filter(function(e){ return getDataValue(e, CONFIG.dataElements.opdEvent) === order.event; });
+        if (isStandaloneRoot){
+            const refreshedRoot = events.find(function(e){ return e.event === order.event; });
+            if (refreshedRoot){ state.currentOrder.sourceEvent = refreshedRoot; samples = [refreshedRoot].concat(samples); }
+        }
+        state.currentOrder.samples = samples;
+        state.currentOrder.status = deriveOrderStatus(samples);
         // Keep the worklist entry behind this order in sync too.
         const worklistItem = state.worklist.find(function(w){ return w.sourceEvent.event === order.event; });
-        if (worklistItem){ worklistItem.samples = state.currentOrder.samples; worklistItem.status = state.currentOrder.status; }
+        if (worklistItem){
+            worklistItem.sourceEvent = state.currentOrder.sourceEvent;
+            worklistItem.samples = samples;
+            worklistItem.status = state.currentOrder.status;
+        }
         renderOrderScreens();
         renderStatStrip();
     });
@@ -1213,12 +1451,12 @@ function updateSampleEvent(eventId, mutate, successMessage, failMessage){
     const payload = {
         event: sample.event, trackedEntity: sample.trackedEntity, program: CONFIG.programUid,
         programStage: CONFIG.laboratoryStageUid, enrollment: sample.enrollment, orgUnit: sample.orgUnit,
-        occurredAt: sample.eventDate || todayIso(), status: sample.status || "ACTIVE", dataValues: values
+        occurredAt: sample.occurredAt || todayIso(), status: sample.status || "ACTIVE", dataValues: values
     };
 
     return postTracker([payload], "UPDATE")
         .done(function(){ toast(successMessage, "success"); refreshOrderData(); })
-        .fail(function(xhr){ console.error(xhr); toast(failMessage, "error"); });
+        .fail(function(xhr){ console.error(xhr); toast(trackerErrorMessage(xhr, failMessage), "error"); });
 }
 
 /* ============================== Verification ============================== */
@@ -1259,22 +1497,69 @@ function setSampleStatus(eventId, status){
 }
 
 /* ============================== Printing ============================== */
+/* Opens a print window and guards against the popup being silently blocked
+   - which can happen if window.open() isn't tightly bound to the triggering
+   click (e.g. after an async call finishes first). Returns the window, or
+   null if it was blocked, in which case a toast already told the person
+   what to do about it. */
+function openPrintWindow(html, w, h){
+    const win = window.open("", "_blank", "width=" + (w || 620) + ",height=" + (h || 480));
+    if (!win){
+        toast("The print window was blocked — allow pop-ups for this site and try again.", "warning");
+        return null;
+    }
+    win.document.write(html);
+    win.document.close();
+    return win;
+}
+
+/* Prints one label per entry in `labels` ({patientName, sid, typeName}) as a
+   single print job - one dialog whether it's one sample or the whole
+   order's worth, via a page-break between each label. */
+function printSampleLabels(labels){
+    if (!labels || !labels.length) return;
+    const body = labels.map(function(l){
+        return "<div class='label'><div class='patient'>" + escapeHtml(l.patientName) + "</div>" +
+            "<div class='sample'>" + escapeHtml(l.sid) + "</div>" +
+            "<div class='barcode'>" + escapeHtml(barcodeText(l.sid)) + "</div>" +
+            "<div class='type'>" + escapeHtml(l.typeName) + "</div></div>";
+    }).join("");
+    const html = "<html><head><title>Laboratory Sample Labels</title><style>" +
+        "body{font-family:Arial,Helvetica,sans-serif;margin:0}" +
+        ".label{padding:25px}.label:not(:last-child){page-break-after:always}" +
+        ".patient{font-size:14px;margin-bottom:6px}" +
+        ".sample{font-size:22px;font-weight:bold}" +
+        ".barcode{font-family:'Courier New',monospace;font-size:38px;letter-spacing:3px;margin:16px 0}" +
+        ".type{font-size:13px;color:#333}" +
+        "</style></head><body>" + body +
+        "<script>window.onload=function(){window.print();window.close();}<" + "/script></body></html>";
+    openPrintWindow(html, 620, 480);
+}
+
+function currentPatientDisplayName(){
+    if (state.currentPatient) return getPatientDisplay(state.currentPatient).name;
+    return (state.currentOrder && state.currentOrder.patientName) || "";
+}
+
 function printLabel(){
     const sid = $("#sampleId").val();
     if (!sid){ toast("Generate a sample ID first.", "error"); return; }
-    const disp = state.currentPatient ? getPatientDisplay(state.currentPatient) : { name: state.currentOrder.patientName || "" };
-    const type = $("#sampleType option:selected").text();
-    const w = window.open("", "_blank", "width=500,height=400");
-    w.document.write(
-        "<html><head><title>Laboratory Sample</title><style>body{font-family:Arial;padding:25px}" +
-        ".barcode{font-family:'Courier New';font-size:38px;letter-spacing:3px;margin:20px 0}.sample{font-size:22px;font-weight:bold}</style></head><body>" +
-        "<h2>Laboratory Sample</h2><div>" + escapeHtml(disp.name) + "</div><br>" +
-        "<div class='sample'>" + escapeHtml(sid) + "</div>" +
-        "<div class='barcode'>" + escapeHtml(barcodeText(sid)) + "</div>" +
-        "<div>" + escapeHtml(type) + "</div>" +
-        "<script>window.onload=function(){window.print();window.close();}<" + "/script></body></html>"
-    );
-    w.document.close();
+    printSampleLabels([{ patientName: currentPatientDisplayName(), sid: sid, typeName: $("#sampleType option:selected").text() }]);
+}
+
+/* "Print all labels" - one job covering every sample currently on this
+   order, in the order they were collected. */
+function printAllLabels(){
+    if (!state.currentOrder || !state.currentOrder.samples.length){ toast("No samples to print yet.", "warning"); return; }
+    const patientName = currentPatientDisplayName();
+    const labels = state.currentOrder.samples.map(function(s){
+        return {
+            patientName: patientName,
+            sid: getDataValue(s, CONFIG.dataElements.sampleId) || s.event,
+            typeName: sampleTypeName(getDataValue(s, CONFIG.dataElements.sampleType))
+        };
+    });
+    printSampleLabels(labels);
 }
 
 function loadOrgUnitName(uid){
@@ -1326,7 +1611,7 @@ function printLabReportForOrder(order, patientTei){
             sections +=
                 "<h4>" + escapeHtml(type) + " &middot; <span class='mono'>" + escapeHtml(sid) + "</span></h4>" +
                 "<table><thead><tr><th>Test</th><th>Result</th><th>Unit</th><th>Ref range</th></tr></thead><tbody>" + rows + "</tbody></table>" +
-                "<div class='footnote'>Collected " + escapeHtml(sample.eventDate || "") +
+                "<div class='footnote'>Collected " + escapeHtml(sample.occurredAt || "") +
                 (verifiedBy ? " &middot; Verified by " + escapeHtml(verifiedBy) : "") +
                 (verifiedDate ? " on " + escapeHtml(verifiedDate.slice(0, 10)) : "") + "</div>";
         });
@@ -1350,7 +1635,7 @@ function printLabReportForOrder(order, patientTei){
             (disp.dob ? "<div class='meta'><b>Date of birth</b>" + escapeHtml(disp.dob) + "</div>" : "") +
             (disp.sex ? "<div class='meta'><b>Sex</b>" + escapeHtml(disp.sex) + "</div>" : "") +
             "<div class='meta'><b>Patient ID</b>" + escapeHtml(disp.patientId) + "</div>" +
-            "<div class='meta'><b>Ordered from</b>" + escapeHtml(stageName(order.sourceEvent.programStage)) + " on " + escapeHtml(order.sourceEvent.eventDate || "") + "</div>" +
+            "<div class='meta'><b>Ordered from</b>" + escapeHtml(stageName(order.sourceEvent.programStage)) + " on " + escapeHtml(order.sourceEvent.occurredAt || "") + "</div>" +
             "<hr>" + sections +
             "<script>window.onload=function(){window.print();}<" + "/script></body></html>"
         );
@@ -1377,19 +1662,17 @@ function printReportForWorklistItem(item){
 
 /* ============================== Direct sample registration ============================== */
 /* For patients requesting a test directly (an ANC panel, a walk-in sugar
-   test) with no order event from OPD or any other stage. This writes a
-   normal order event into directOrderStage() below - which the regular
-   worklist scan then picks up exactly like any other stage's orders.
-   Everything past that point (collect sample, enter results, verify) reuses
-   the existing order detail screens unchanged. */
-
-/* CONFIG.directOrderStageUid is optional: if it isn't set, walk-in orders
-   are written straight into the lab stage itself, since for a walk-in test
-   there's no separate ordering clinician stage anyway - the lab is both the
-   requester and the collector. Set directOrderStageUid explicitly if you'd
-   rather keep walk-in requests visually separate from samples in stage
-   metadata/reports. */
-function directOrderStage(){ return CONFIG.directOrderStageUid || CONFIG.laboratoryStageUid; }
+   test) with no order event from OPD or any other stage, and no separate
+   clinician-then-lab handoff to model. Rather than create a throwaway
+   "order" event purely to hold the request, the first sample collected here
+   IS the order: a normal event in CONFIG.laboratoryStageUid, with a sample
+   id/type/status like any other sample, but no opdEvent link. loadWorklist()
+   recognises a lab-stage event with a sample id and no opdEvent as a
+   standalone worklist row in its own right. If the visit needs a second
+   sample (e.g. blood + urine for a panel), that one links back via opdEvent
+   to this root sample exactly like a normal order's second sample would -
+   the existing "Collect a new sample" screen in the order detail view
+   handles that without any special-casing. */
 
 function openDirectOrderView(){
     if (!CONFIG.patientAttributes || !CONFIG.patientAttributes.patientId){
@@ -1401,6 +1684,8 @@ function openDirectOrderView(){
     $("#directSearchResults").empty();
     $("#directSelectedPatient").addClass("hidden").empty();
     $("#directTestSelection").addClass("hidden");
+    $("#directSampleId").val("");
+    $("#directBarcodeArea").addClass("hidden");
     $("#directPatientSearch").removeClass("hidden");
     $("#worklistView, #orderView").addClass("hidden");
     $("#directOrderView").removeClass("hidden");
@@ -1453,12 +1738,14 @@ function selectDirectPatient(tei){
     $panel.append($("<button>").addClass("btn-secondary btn-sm").text("Change patient").on("click", openDirectOrderView));
 
     if (!enrollment){
-        $panel.append("<div class='message warning' style='margin-top:12px'>This patient isn't actively enrolled in the ePHC program, so a lab order can't be created for them here yet. Enroll them in the program first.</div>");
+        $panel.append("<div class='message warning' style='margin-top:12px'>This patient isn't actively enrolled in the ePHC program, so a lab sample can't be created for them here yet. Enroll them in the program first.</div>");
         $("#directTestSelection").addClass("hidden");
         return;
     }
 
     renderDirectTestOptions();
+    setupSampleTypes("#directSampleType");
+    generateDirectSampleId(); // auto-fill sample id + barcode preview; button below can still regenerate
     $("#directTestSelection").removeClass("hidden");
 }
 
@@ -1474,7 +1761,14 @@ function renderDirectTestOptions(){
     });
 }
 
-function createDirectOrder(){
+function generateDirectSampleId(){
+    const id = generateSampleId();
+    $("#directSampleId").val(id);
+    $("#directBarcodeText").text(barcodeText(id));
+    $("#directBarcodeArea").removeClass("hidden");
+}
+
+function createDirectSample(){
     const selected = [];
     $("#directTestOptions input:checked").each(function(){ selected.push($(this).val()); });
     if (!selected.length){ toast("Select at least one test.", "error"); return; }
@@ -1483,34 +1777,43 @@ function createDirectOrder(){
     const tei = state.directOrder.patient;
     if (!enrollment || !tei) return;
 
+    let sid = $("#directSampleId").val().trim();
+    if (!sid){ generateDirectSampleId(); sid = $("#directSampleId").val().trim(); }
+    const sampleType = $("#directSampleType").val();
+
     const newEventId = generateUid();
-    const orderEvent = {
+    const rootSample = {
         event: newEventId,
         trackedEntity: tei.trackedEntity,
         program: CONFIG.programUid,
-        programStage: directOrderStage(),
+        programStage: CONFIG.laboratoryStageUid,
         enrollment: enrollment.enrollment,
         orgUnit: enrollment.orgUnit,
         occurredAt: todayIso(),
         status: "ACTIVE",
-        dataValues: [ dataValue(CONFIG.dataElements.orders, JSON.stringify(selected)) ]
+        dataValues: [
+            dataValue(CONFIG.dataElements.sampleId, sid),
+            dataValue(CONFIG.dataElements.sampleType, sampleType),
+            dataValue(CONFIG.dataElements.status, "COLLECTED"),
+            dataValue(CONFIG.dataElements.labOrders, JSON.stringify(selected))
+        ]
     };
 
-    $("#createDirectOrderBtn").prop("disabled", true).text("Creating…");
-    postTracker([orderEvent], "CREATE")
+    $("#createDirectOrderBtn").prop("disabled", true).text("Registering…");
+    postTracker([rootSample], "CREATE")
         .done(function(){
             const disp = getPatientDisplay(tei);
             state.worklist.unshift({
-                sourceEvent: orderEvent, tests: selected, samples: [],
-                status: "ORDERED", patientName: disp.name, patientId: disp.patientId
+                sourceEvent: rootSample, tests: selected, samples: [rootSample],
+                status: "COLLECTED", patientName: disp.name, patientId: disp.patientId
             });
             state.currentPatient = tei;
-            toast("Order created.", "success");
+            toast("Sample registered.", "success");
             $("#directOrderView").addClass("hidden");
             openOrder(newEventId);
         })
-        .fail(function(xhr){ console.error(xhr); toast("Unable to create the order.", "error"); })
-        .always(function(){ $("#createDirectOrderBtn").prop("disabled", false).text("Create order & continue"); });
+        .fail(function(xhr){ console.error(xhr); toast(trackerErrorMessage(xhr, "Unable to register the sample."), "error"); })
+        .always(function(){ $("#createDirectOrderBtn").prop("disabled", false).text("Register sample"); });
 }
 
 function goBack(){
@@ -1545,13 +1848,15 @@ $(document).on("click", ".reject-one", function(){
 $("#generateSampleBtn").on("click", generateSample);
 $("#createLabEventBtn").on("click", createLabEvent);
 $("#printBarcodeBtn").on("click", printLabel);
+$("#printAllLabelsBtn").on("click", printAllLabels);
 $("#printReportBtn").on("click", printLabReport);
 $("#backBtn").on("click", goBack);
 $("#newDirectOrderBtn").on("click", openDirectOrderView);
 $("#directBackBtn").on("click", function(){ $("#directOrderView").addClass("hidden"); $("#worklistView").removeClass("hidden"); loadWorklist(); });
 $("#directSearchBtn").on("click", searchDirectPatients);
 $("#directSearchBox").on("keydown", function(e){ if (e.key === "Enter") searchDirectPatients(); });
-$("#createDirectOrderBtn").on("click", createDirectOrder);
+$("#directGenerateSampleBtn").on("click", generateDirectSampleId);
+$("#createDirectOrderBtn").on("click", createDirectSample);
 $("#refreshBtn").on("click", loadWorklist);
 $("#searchBox").on("input", function(){ state.worklistPage = 1; renderWorklist(); });
 $("#statusFilter").on("change", function(){ state.worklistPage = 1; renderWorklist(); });

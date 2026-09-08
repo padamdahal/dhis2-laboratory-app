@@ -227,6 +227,11 @@ tbody tr:hover{background:#f9fbfb}
 .sample-tile .tests{font-size:11.5px;color:var(--ink)}
 .test-group-label{font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:var(--ink-soft);font-weight:700;margin:10px 0 4px}
 .test-group-label:first-child{margin-top:0}
+.tile-actions{display:flex;gap:12px;margin-top:7px}
+.tile-link{background:none;border:0;padding:0;font-size:11px;font-weight:700;cursor:pointer;color:var(--brand-dark);text-decoration:underline;text-underline-offset:2px}
+.tile-link:hover{color:var(--brand)}
+.tile-link.danger{color:var(--danger)}
+.tile-link.danger:hover{color:#8a221b}
 
 .result-row{display:grid;grid-template-columns:1.5fr 1fr .5fr;gap:10px;align-items:center;padding:8px 0;border-top:1px solid #eef1f1}
 .result-row:first-child{border-top:0}
@@ -382,6 +387,7 @@ tbody tr:hover{background:#f9fbfb}
             <button class="btn-secondary" id="generateSampleBtn">Generate sample ID</button>
             <button class="btn-secondary" id="printBarcodeBtn">Print label</button>
             <button class="btn-primary" id="createLabEventBtn">Collect sample</button>
+            <button class="btn-secondary hidden" id="cancelEditSampleBtn">Cancel edit</button>
           </div>
         </div>
         <div class="card">
@@ -519,7 +525,8 @@ const state = {
     currentOrder: null,     // one entry from state.worklist
     currentPatient: null,
     creating: false,
-    directOrder: { patient: null, enrollment: null }   // walk-in registration flow, see openDirectOrderView()
+    directOrder: { patient: null, enrollment: null },  // walk-in registration flow, see openDirectOrderView()
+    editingSampleId: null   // set while editing an existing COLLECTED sample's tests/type, see startEditSample()
 };
 
 /* ============================== API layer ============================== */
@@ -606,6 +613,14 @@ function dataValue(de, value){ return { dataElement: de, value: value == null ? 
 function getDataValue(event, de){ if (!event || !event.dataValues) return null; const x = event.dataValues.find(function(v){ return v.dataElement === de; }); return x ? x.value : null; }
 function setDataValue(values, de, v){ const existing = values.find(function(a){ return a.dataElement === de; }); if (existing) existing.value = String(v == null ? "" : v); else values.push(dataValue(de, v)); }
 function getByPath(obj, path){ return path.split(".").reduce(function(o,k){ return (o && o[k] !== undefined) ? o[k] : undefined; }, obj); }
+/* Prefers a short, locale-aware label over the full `name` where DHIS2
+   metadata provides one - most useful now that tests/samples render as
+   compact tiles. Falls back gracefully through whichever fields a given
+   object actually has. */
+function pickLabel(obj){
+    if (!obj) return "";
+    return obj.displayShortName || obj.shortName || obj.displayName || obj.name || "";
+}
 function sampleTypeName(code){ const x = (CONFIG.sampleTypes||[]).find(function(s){ return s.code === code; }); return x ? x.name : (code || "Unknown"); }
 function testName(code){ return (CONFIG.tests && CONFIG.tests[code]) ? CONFIG.tests[code].name : code; }
 function stageName(uid){ return (CONFIG.stageNames && CONFIG.stageNames[uid]) || uid; }
@@ -762,19 +777,10 @@ function loadConfig(){
     });
 }
 function loadStageNames(){
-    return apiGet("/programStages?filter=program.id:eq:" + encodeURIComponent(CONFIG.programUid) + "&fields=id,name&paging=false")
-        .then(function(r){ CONFIG.stageNames = {}; (r.programStages||[]).forEach(function(s){ CONFIG.stageNames[s.id] = s.name; }); })
+    return apiGet("/programStages?filter=program.id:eq:" + encodeURIComponent(CONFIG.programUid) + "&fields=id,name,shortName,displayName,displayShortName&paging=false")
+        .then(function(r){ CONFIG.stageNames = {}; (r.programStages||[]).forEach(function(s){ CONFIG.stageNames[s.id] = pickLabel(s); }); })
         .catch(function(){ CONFIG.stageNames = {}; });
 }
-/* Reads the test catalog from a Data Element Group Set: each Data Element
-   Group under it is one lab test (its name is the test name, its member
-   data elements are the result fields), which is the whole point — new
-   tests are added/edited in DHIS2 metadata maintenance, no datastore edit
-   or app redeploy needed. A group's `description` can carry `SAMPLE:<code>`
-   to suggest a sample type; each data element's `description` can carry
-   `UNIT:<unit>,RANGE:<low>-<high>` for the result entry/verification/print
-   screens. A test that only has one result field still needs its own group
-   - there's no shortcut for single-data-element tests. */
 /* Reads the test catalog from a Data Element Group Set (see loadWorklist's
    comment on how order/sample events are told apart).
    IMPORTANT: each test is keyed by its Data Element Group's CODE, not its
@@ -784,9 +790,16 @@ function loadStageNames(){
    must be set to that same value for the app to recognise it. If a group
    has no code set, its UID is used as a fallback key, but then the ordering
    side would need to select tests by that UID too, which isn't practical
-   for a real option set - set a matching Code on every test group. */
+   for a real option set - set a matching Code on every test group.
+   Test/result names prefer shortName/displayShortName over the full name
+   (see pickLabel()) - keeps the compact tiles compact. A group's
+   `description` can carry `SAMPLE:<code>` to suggest a sample type; each
+   data element's `description` can carry `UNIT:<unit>,RANGE:<low>-<high>`
+   for the result entry/verification/print screens. A test that only has one
+   result field still needs its own group - there's no shortcut for
+   single-data-element tests. */
 function loadTestMetadata(){
-    return apiGet("/dataElementGroupSets/" + encodeURIComponent(CONFIG.testGroupSetUid) + ".json?fields=dataElementGroups[id,code,name,description,dataElements[id,name,description]]")
+    return apiGet("/dataElementGroupSets/" + encodeURIComponent(CONFIG.testGroupSetUid) + ".json?fields=dataElementGroups[id,code,name,shortName,displayName,displayShortName,description,dataElements[id,name,shortName,displayName,displayShortName,description]]")
         .then(function(r){
             CONFIG.tests = {};
             CONFIG.resultDataElements = {};
@@ -794,13 +807,13 @@ function loadTestMetadata(){
                 const groupTokens = parseTokens(g.description);
                 const key = g.code || g.id;
                 CONFIG.tests[key] = {
-                    name: g.name,
+                    name: pickLabel(g),
                     sampleType: groupTokens.SAMPLE || "",
                     resultDataElement: (g.dataElements || []).map(function(d){ return d.id; })
                 };
                 (g.dataElements || []).forEach(function(d){
                     const deTokens = parseTokens(d.description);
-                    CONFIG.resultDataElements[d.id] = { name: d.name, unit: deTokens.UNIT || "", range: deTokens.RANGE || "" };
+                    CONFIG.resultDataElements[d.id] = { name: pickLabel(d), unit: deTokens.UNIT || "", range: deTokens.RANGE || "" };
                 });
             });
         })
@@ -1099,18 +1112,36 @@ function setupSampleTypes(selector){
     (CONFIG.sampleTypes || []).forEach(function(t){ s.append($("<option>").val(t.code).text(t.name)); });
 }
 
-/* Tests already covered by an existing sample for this order. */
-function collectedTestSet(){
+/* Tests already covered by an existing sample for this order. When editing
+   sample X, its own tests must NOT count against itself (X's own tests
+   should render checked+enabled, not disabled as "already sampled"). */
+function collectedTestSet(excludeEventId){
     const set = new Set();
-    state.currentOrder.samples.forEach(function(s){ getSampleTests(s).forEach(function(t){ set.add(t); }); });
+    state.currentOrder.samples.forEach(function(s){
+        if (excludeEventId && s.event === excludeEventId) return;
+        getSampleTests(s).forEach(function(t){ set.add(t); });
+    });
     return set;
 }
 
 function resetSampleForm(){
+    state.editingSampleId = null;
     $("#createLabEventBtn").prop("disabled", false).text("Collect sample");
+    $("#generateSampleBtn").prop("disabled", false);
+    $("#cancelEditSampleBtn").addClass("hidden");
     generateSample(); // auto-fill sample id + barcode preview; "Generate sample ID" button can still regenerate
+    renderSampleTestChecklist();
+}
 
-    const collected = collectedTestSet();
+/* Shared by both "collect a new sample" and "edit an existing sample" -
+   the only difference is which tests start checked and which are excluded
+   from the "already sampled" disabling. */
+function renderSampleTestChecklist(){
+    const editingSample = state.editingSampleId
+        ? state.currentOrder.samples.find(function(s){ return s.event === state.editingSampleId; })
+        : null;
+    const currentlyInSample = editingSample ? new Set(getSampleTests(editingSample)) : new Set();
+    const collected = collectedTestSet(state.editingSampleId);
     const orderedSet = new Set(state.currentOrder.tests);
     const additionalCodes = Object.keys(CONFIG.tests || {})
         .filter(function(code){ return !orderedSet.has(code); })
@@ -1121,9 +1152,10 @@ function resetSampleForm(){
         const t = CONFIG.tests[code];
         const id = "sample_test_" + code;
         const already = collected.has(code);
+        const checked = currentlyInSample.has(code);
         c.append(
             '<div class="check-row' + (already ? " disabled" : "") + '">' +
-            '<input type="checkbox" id="' + escapeHtml(id) + '" value="' + escapeHtml(code) + '"' + (already ? " disabled" : "") + '>' +
+            '<input type="checkbox" id="' + escapeHtml(id) + '" value="' + escapeHtml(code) + '"' + (checked ? " checked" : "") + (already ? " disabled" : "") + '>' +
             '<label for="' + escapeHtml(id) + '" style="margin:0;font-weight:400">' + escapeHtml(t ? t.name : code) + (already ? ' <span class="pill">already sampled</span>' : "") + '</label></div>'
         );
     }
@@ -1141,6 +1173,75 @@ function resetSampleForm(){
     }
 }
 
+/* Edit mode reuses the "Collect a new sample" panel: sample id/type are
+   pre-filled from the existing sample, its own tests start checked (see
+   renderSampleTestChecklist), and the primary button becomes a save action
+   (see createLabEvent's editingSampleId branch). Restricted to COLLECTED
+   samples by the caller (renderSamples only shows Edit there). */
+function startEditSample(eventId){
+    const sample = state.currentOrder.samples.find(function(s){ return s.event === eventId; });
+    if (!sample) return;
+    state.editingSampleId = eventId;
+    $("#sampleId").val(getDataValue(sample, CONFIG.dataElements.sampleId) || sample.event);
+    $("#barcodeArea").addClass("hidden");
+    $("#generateSampleBtn").prop("disabled", true); // sample id is fixed once collected
+    $("#sampleType").val(getDataValue(sample, CONFIG.dataElements.sampleType) || "");
+    $("#createLabEventBtn").text("Save changes");
+    $("#cancelEditSampleBtn").removeClass("hidden");
+    renderSampleTestChecklist();
+    const el = document.getElementById("sampleType");
+    if (el && el.scrollIntoView) el.scrollIntoView({ behavior: "smooth", block: "center" });
+}
+
+function cancelEditSample(){ resetSampleForm(); }
+
+function saveEditedSample(){
+    const selected = [];
+    $("#sampleTests input:checked").each(function(){ selected.push($(this).val()); });
+    if (!selected.length){ toast("Select at least one test.", "error"); return; }
+
+    const eventId = state.editingSampleId;
+    const newSampleType = $("#sampleType").val();
+    $("#createLabEventBtn").prop("disabled", true).text("Saving…");
+    updateSampleEvent(eventId, function(values){
+        setDataValue(values, CONFIG.dataElements.labOrders, JSON.stringify(selected));
+        setDataValue(values, CONFIG.dataElements.sampleType, newSampleType);
+    }, "Sample updated.", "Unable to update the sample.")
+        .done(function(){ resetSampleForm(); })
+        .always(function(){ $("#createLabEventBtn").prop("disabled", false); });
+}
+
+/* Deletes a sample outright - only ever offered for COLLECTED samples (see
+   renderSamples), since nothing has been entered against it yet, so there's
+   nothing to lose. Once a sample has moved past COLLECTED, "Return for
+   correction" in Verification is the right tool instead of deletion. */
+function deleteSample(eventId){
+    const sample = state.currentOrder.samples.find(function(s){ return s.event === eventId; });
+    if (!sample) return;
+    const status = getDataValue(sample, CONFIG.dataElements.status) || "COLLECTED";
+    if (status !== "COLLECTED"){ toast("Only samples still in Collected status can be deleted.", "warning"); return; }
+
+    const isRoot = eventId === state.currentOrder.sourceEvent.event;
+    confirmAction({
+        title: "Delete sample",
+        message: isRoot
+            ? "This sample is also this order's origin record — deleting it removes the whole order, not just this one sample. Use this for a mistaken walk-in registration. This can't be undone."
+            : "This permanently removes the sample record. Use this for a mis-collected or discarded specimen that needs to be recollected. This can't be undone.",
+        confirmLabel: "Delete sample",
+        tone: "danger"
+    }).then(function(ok){
+        if (!ok) return;
+        postTracker([sample], "DELETE")
+            .done(function(){
+                toast("Sample deleted.", "success");
+                if (isRoot){ goBack(); return; }
+                if (state.editingSampleId === eventId) resetSampleForm();
+                refreshOrderData();
+            })
+            .fail(function(xhr){ console.error(xhr); toast(trackerErrorMessage(xhr, "Unable to delete the sample."), "error"); });
+    });
+}
+
 function renderSamples(){
     const c = $("#samplesList").empty();
     $("#printAllLabelsBtn").toggleClass("hidden", !state.currentOrder.samples.length);
@@ -1150,11 +1251,20 @@ function renderSamples(){
         const sid = getDataValue(sample, CONFIG.dataElements.sampleId) || sample.event;
         const status = getDataValue(sample, CONFIG.dataElements.status) || "COLLECTED";
         const type = sampleTypeName(getDataValue(sample, CONFIG.dataElements.sampleType));
+        // Edit/delete only while still COLLECTED - see the functions'
+        // own comments for why that gate matters.
+        const actions = status === "COLLECTED"
+            ? '<div class="tile-actions">' +
+              '<button class="tile-link edit-sample" data-event="' + escapeHtml(sample.event) + '">Edit</button>' +
+              '<button class="tile-link danger delete-sample" data-event="' + escapeHtml(sample.event) + '">Delete</button>' +
+              '</div>'
+            : "";
         c.append(
             '<div class="sample-tile">' +
             '<div class="top"><strong>' + escapeHtml(type) + '</strong>' + tplStatusChip(status) + '</div>' +
             '<div class="sid">' + escapeHtml(sid) + '</div>' +
             '<div class="tests">' + tests.map(testName).map(escapeHtml).join(", ") + '</div>' +
+            actions +
             '</div>'
         );
     });
@@ -1169,6 +1279,7 @@ function generateSample(){
 }
 
 function createLabEvent(){
+    if (state.editingSampleId){ saveEditedSample(); return; }
     if (state.creating || !state.currentOrder) return;
 
     const selected = [];
@@ -1434,8 +1545,8 @@ function loadOrgUnitName(uid){
     if (!uid) return $.Deferred().resolve("").promise();
     CONFIG.orgUnitNames = CONFIG.orgUnitNames || {};
     if (CONFIG.orgUnitNames[uid]) return $.Deferred().resolve(CONFIG.orgUnitNames[uid]).promise();
-    return apiGet("/organisationUnits/" + encodeURIComponent(uid) + ".json?fields=name")
-        .then(function(ou){ CONFIG.orgUnitNames[uid] = ou.name; return ou.name; })
+    return apiGet("/organisationUnits/" + encodeURIComponent(uid) + ".json?fields=name,shortName,displayName,displayShortName")
+        .then(function(ou){ const label = pickLabel(ou); CONFIG.orgUnitNames[uid] = label; return label; })
         .catch(function(){ return ""; });
 }
 
@@ -1698,6 +1809,9 @@ $(document).on("click", ".tab", function(){
     $(".tab").removeClass("active"); $(this).addClass("active");
     $(".tab-content").removeClass("active"); $("#tab-" + t).addClass("active");
 });
+$(document).on("click", ".edit-sample", function(){ startEditSample($(this).data("event")); });
+$(document).on("click", ".delete-sample", function(){ deleteSample($(this).data("event")); });
+$("#cancelEditSampleBtn").on("click", cancelEditSample);
 $(document).on("click", ".save-one", function(){ saveOneResult($(this).data("event"), false); });
 $(document).on("click", ".complete-one", function(){ saveOneResult($(this).data("event"), true); });
 $(document).on("input", ".result-input", function(){
