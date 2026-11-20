@@ -1,0 +1,963 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Order Laboratory Tests — DHIS2</title>
+<script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+<style>
+/* ==========================================================================
+   DESIGN TOKENS — aligned with Laboratory Worklist (index.html)
+   ========================================================================== */
+:root{
+  --ink:#101b20;
+  --ink-soft:#4c5c62;
+  --ink-faint:#7c8b90;
+  --bg:#eef2f2;
+  --surface:#ffffff;
+  --border:#d7e0e0;
+  --border-strong:#b7c6c6;
+
+  --brand:#0b6e63;
+  --brand-dark:#07524a;
+  --brand-tint:#e2f1ee;
+
+  --danger:#ac2b22;
+  --danger-tint:#fbeae8;
+  --warn:#93630f;
+  --warn-tint:#fbf0d6;
+  --info:#1d5da6;
+  --info-tint:#e5eef9;
+  --violet:#6a4c9c;
+  --violet-tint:#efe8f8;
+  --copper:#9c5417;
+  --copper-tint:#f8e9da;
+  --ok:#1f7a4d;
+  --ok-tint:#e1f3e8;
+
+  --radius-sm:5px;
+  --radius:8px;
+  --radius-lg:12px;
+  --shadow-sm:0 1px 2px rgba(16,27,32,.07);
+  --shadow-md:0 8px 24px rgba(16,27,32,.12);
+
+  --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:ui-monospace,SFMono-Regular,"SF Mono",Consolas,"Liberation Mono",Menlo,monospace;
+}
+
+*{box-sizing:border-box}
+body{margin:0;font-family:var(--font-ui);background:var(--bg);color:var(--ink);font-size:14.5px;line-height:1.45}
+h1,h2,h3{font-family:var(--font-ui);margin:0}
+a{color:var(--brand)}
+:focus-visible{outline:2px solid var(--brand);outline-offset:2px}
+button:focus-visible{outline-offset:3px}
+@media (prefers-reduced-motion: reduce){ *{animation-duration:.001ms!important;transition-duration:.001ms!important} }
+
+/* ==========================================================================
+   HEADER
+   ========================================================================== */
+.lis-header{background:var(--brand-dark);color:#fff;padding:14px 24px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+.lis-header__brand{display:flex;align-items:center;gap:12px}
+.lis-mark{width:26px;height:26px;color:#bfe4dc;flex:none}
+.lis-header__title{font-size:17px;font-weight:700;letter-spacing:.2px}
+.lis-header__subtitle{font-size:12px;color:#bcdad4}
+.lis-header__user{font-size:13px;color:#d8ece8}
+body.embedded .lis-header{display:none}
+
+/* ==========================================================================
+   LAYOUT
+   ========================================================================== */
+.container{max-width:980px;margin:0 auto;padding:22px 20px 64px}
+body.embedded .container{padding:12px 12px 40px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;margin-bottom:16px;box-shadow:var(--shadow-sm)}
+.section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.section-title{font-size:15px;font-weight:700;color:var(--ink)}
+.hidden{display:none!important}
+.mono{font-family:var(--font-mono)}
+.small{font-size:12px;color:var(--ink-soft)}
+
+/* ==========================================================================
+   LOADING / BANNERS / TOASTS
+   ========================================================================== */
+.loading-state{display:flex;flex-direction:column;align-items:center;gap:12px;padding:64px 20px;color:var(--ink-soft)}
+.spinner{width:26px;height:26px;border-radius:50%;border:3px solid var(--border);border-top-color:var(--brand);animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+.banner{padding:14px 16px;border-radius:var(--radius);font-size:13.5px;margin-bottom:16px;line-height:1.5}
+.banner-danger{background:var(--danger-tint);color:var(--danger);border:1px solid #f0c6c1}
+.banner-success{background:var(--ok-tint);color:var(--ok);border:1px solid #bce2cb}
+.banner-warn{background:var(--warn-tint);color:var(--warn);border:1px solid #ebd7a7}
+.banner code{font-family:var(--font-mono);background:rgba(16,27,32,.07);padding:1px 5px;border-radius:4px;font-size:12.5px}
+
+.toast-region{position:fixed;right:18px;bottom:18px;z-index:80;display:flex;flex-direction:column;gap:8px;max-width:360px}
+.toast{display:flex;align-items:flex-start;gap:10px;background:var(--surface);border:1px solid var(--border);border-left:4px solid var(--ink-faint);border-radius:var(--radius);padding:11px 14px;box-shadow:var(--shadow-md);opacity:0;transform:translateY(8px);transition:opacity .18s ease,transform .18s ease;font-size:13.5px}
+.toast.show{opacity:1;transform:translateY(0)}
+.toast-success{border-left-color:var(--ok)}
+.toast-error{border-left-color:var(--danger)}
+.toast-warning{border-left-color:var(--warn)}
+.toast-info{border-left-color:var(--info)}
+.toast-icon{flex:none;width:18px;height:18px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#fff}
+.toast-success .toast-icon{background:var(--ok)}
+.toast-error .toast-icon{background:var(--danger)}
+.toast-warning .toast-icon{background:var(--warn)}
+.toast-info .toast-icon{background:var(--info)}
+
+/* ==========================================================================
+   CONTROLS
+   ========================================================================== */
+input,select,textarea{padding:9px 11px;border:1px solid var(--border-strong);border-radius:var(--radius-sm);font-size:14px;font-family:inherit;background:#fff;color:var(--ink);width:100%}
+input::placeholder{color:var(--ink-faint)}
+label{display:block;font-weight:600;font-size:12.5px;color:var(--ink-soft);margin-bottom:5px}
+
+button{padding:9px 15px;border:0;border-radius:var(--radius-sm);cursor:pointer;font-weight:600;font-size:13.5px;font-family:inherit;transition:filter .12s ease,background .12s ease}
+button:hover{filter:brightness(.95)}
+button:disabled{opacity:.5;cursor:not-allowed;filter:none}
+.btn-primary{background:var(--brand);color:#fff}
+.btn-secondary{background:#fff;color:var(--ink);border:1px solid var(--border-strong)}
+.btn-ghost{background:transparent;color:var(--brand-dark);border:1px solid transparent;padding:6px 10px}
+.btn-ghost:hover{background:var(--brand-tint)}
+.btn-sm{padding:6px 11px;font-size:12.5px}
+
+/* ==========================================================================
+   PATIENT CONTEXT CARD
+   ========================================================================== */
+.patient-bar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.patient-name{font-size:19px;font-weight:700}
+.patient-meta{font-size:12.5px;color:var(--ink-soft);margin-top:4px;display:flex;flex-wrap:wrap;gap:6px 14px}
+.patient-meta strong{color:var(--ink)}
+.context-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;padding-top:10px;border-top:1px solid var(--border)}
+.ctx-tag{font-size:11.5px;color:var(--ink-soft);background:#f5f8f8;border:1px solid var(--border);border-radius:var(--radius-sm);padding:3px 8px}
+.ctx-tag strong{color:var(--ink);font-family:var(--font-mono);font-weight:600}
+
+/* ==========================================================================
+   TEST PICKER
+   ========================================================================== */
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px}
+.search-field{position:relative;flex:1 1 260px}
+.search-field svg{position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--ink-faint);width:15px;height:15px}
+.search-field input{padding-left:32px}
+
+.filter-strip{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.filter-btn{padding:5px 11px;border-radius:16px;font-size:12px;font-weight:600;background:#f5f8f8;color:var(--ink-soft);border:1px solid var(--border)}
+.filter-btn:hover{filter:none;border-color:var(--border-strong);color:var(--ink)}
+.filter-btn.active{background:var(--brand);color:#fff;border-color:var(--brand)}
+
+.test-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:10px}
+.test-card{display:flex;align-items:flex-start;gap:10px;border:1px solid var(--border);border-radius:var(--radius);padding:12px 13px;cursor:pointer;background:var(--surface);transition:border-color .12s ease,background .12s ease;user-select:none}
+.test-card:hover{border-color:var(--border-strong);background:#fafcfc}
+.test-card.is-selected{border-color:var(--brand);background:var(--brand-tint)}
+.test-card input[type="checkbox"]{width:16px;height:16px;margin:2px 0 0;accent-color:var(--brand);flex:none;cursor:pointer}
+.test-card__body{min-width:0;flex:1}
+.test-card__top{display:flex;align-items:baseline;justify-content:space-between;gap:6px}
+.test-card__name{font-weight:700;font-size:13.5px;color:var(--ink);line-height:1.3}
+.test-card__code{font-family:var(--font-mono);font-size:11px;color:var(--ink-soft);flex:none}
+.test-card__sample{font-size:11.5px;color:var(--brand-dark);font-weight:600;margin-top:3px}
+.test-card__params{font-size:11.5px;color:var(--ink-soft);margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* ==========================================================================
+   ORDER DETAILS & SUBMIT BAR
+   ========================================================================== */
+.order-fields{display:grid;grid-template-columns:repeat(2,minmax(200px,1fr));gap:14px;margin-top:16px;padding-top:16px;border-top:1px solid var(--border)}
+@media(max-width:650px){.order-fields{grid-template-columns:1fr}.container{padding:14px 12px 48px}}
+
+.selected-summary{margin-top:14px;padding:12px 14px;background:#f5f8f8;border:1px solid var(--border);border-radius:var(--radius)}
+.selected-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.selected-chip{display:inline-flex;align-items:center;gap:6px;background:var(--surface);border:1px solid #b8d8d2;color:var(--brand-dark);border-radius:16px;padding:3px 8px 3px 10px;font-size:12px;font-weight:600}
+.selected-chip button{background:none;border:0;padding:0 2px;font-size:14px;line-height:1;color:var(--ink-soft);cursor:pointer}
+.selected-chip button:hover{color:var(--danger);filter:none}
+
+.actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-top:16px}
+.actions-right{display:flex;gap:8px;flex-wrap:wrap}
+
+/* ==========================================================================
+   EXISTING ORDERS LIST
+   ========================================================================== */
+.status-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px 3px 7px;border-radius:20px;font-size:11.5px;font-weight:700;letter-spacing:.2px;white-space:nowrap}
+.status-chip .dot{width:6px;height:6px;border-radius:50%}
+.status-ORDERED{background:var(--warn-tint);color:var(--warn)} .status-ORDERED .dot{background:var(--warn)}
+.status-COLLECTED{background:var(--info-tint);color:var(--info)} .status-COLLECTED .dot{background:var(--info)}
+.status-PROCESSING{background:var(--violet-tint);color:var(--violet)} .status-PROCESSING .dot{background:var(--violet)}
+.status-COMPLETED{background:var(--copper-tint);color:var(--copper)} .status-COMPLETED .dot{background:var(--copper)}
+.status-VERIFIED{background:var(--ok-tint);color:var(--ok)} .status-VERIFIED .dot{background:var(--ok)}
+
+.order-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:11px 0;border-top:1px solid var(--border)}
+.order-row:first-child{border-top:0;padding-top:0}
+.order-row:last-child{padding-bottom:0}
+.order-row__tests{font-weight:600;font-size:13.5px;color:var(--ink)}
+.order-row__meta{font-size:12px;color:var(--ink-soft);margin-top:2px}
+.empty{padding:22px 16px;text-align:center;color:var(--ink-soft);background:#f9fbfb;border:1px dashed var(--border-strong);border-radius:var(--radius);font-size:13.5px}
+</style>
+</head>
+<body>
+
+<header class="lis-header">
+  <div class="lis-header__brand">
+    <svg class="lis-mark" viewBox="0 0 32 32" fill="none" aria-hidden="true">
+      <path d="M12 3h8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+      <path d="M14 3v9.6L7.4 24.2C6.2 26.4 7.8 29 10.3 29h11.4c2.5 0 4.1-2.6 2.9-4.8L18 12.6V3" stroke="currentColor" stroke-width="2.2" stroke-linejoin="round" stroke-linecap="round"/>
+      <path d="M9.6 21h12.8" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>
+    </svg>
+    <div>
+      <div class="lis-header__title">Order Laboratory Tests</div>
+      <div class="lis-header__subtitle">Health worker lab request form</div>
+    </div>
+  </div>
+  <div class="lis-header__user" id="currentUserLabel"></div>
+</header>
+
+<div id="toastRegion" class="toast-region" aria-live="polite" aria-atomic="false"></div>
+
+<div class="container">
+  <div id="fatalError" class="banner banner-danger hidden"></div>
+  <div id="loading" class="loading-state"><div class="spinner"></div><div>Loading patient &amp; laboratory test catalog…</div></div>
+
+  <div id="app" class="hidden">
+
+    <!-- ============== SUCCESS CONFIRMATION ============== -->
+    <div id="orderCreatedBanner" class="banner banner-success hidden"></div>
+
+    <!-- ============== PATIENT CONTEXT ============== -->
+    <div class="card">
+      <div class="patient-bar">
+        <div>
+          <div id="patientName" class="patient-name">Loading patient…</div>
+          <div id="patientMeta" class="patient-meta"></div>
+        </div>
+        <span class="ctx-tag" id="targetStageBadge"></span>
+      </div>
+      <div class="context-tags" id="contextTags"></div>
+    </div>
+
+    <!-- ============== TEST SELECTION & ORDER FORM ============== -->
+    <div class="card">
+      <div class="section-head">
+        <h2 class="section-title">Select laboratory tests</h2>
+        <span class="small" id="catalogCount"></span>
+      </div>
+
+      <div class="toolbar">
+        <div class="search-field">
+          <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><circle cx="8.5" cy="8.5" r="6" stroke="currentColor" stroke-width="1.6"/><path d="M17 17l-4-4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+          <input id="testSearchBox" placeholder="Search test name, code, or parameter…">
+        </div>
+        <button type="button" class="btn-ghost btn-sm" id="clearSelectionBtn">Clear selection</button>
+      </div>
+
+      <div id="sampleTypeFilters" class="filter-strip"></div>
+      <div id="testGrid" class="test-grid"></div>
+
+      <div class="order-fields">
+        <div>
+          <label for="orderDateInput">Order date</label>
+          <input type="date" id="orderDateInput">
+        </div>
+        <div id="requestedFromWrap" class="hidden">
+          <label for="requestedFromInput">Ordered from (clinic / stage)</label>
+          <input type="text" id="requestedFromInput" placeholder="e.g. OPD, ANC, Emergency">
+        </div>
+      </div>
+
+      <div id="selectedSummary" class="selected-summary hidden">
+        <div class="small"><strong id="selectedCountLabel">0 tests selected</strong></div>
+        <div id="selectedChips" class="selected-chips"></div>
+      </div>
+
+      <div class="actions">
+        <div class="small" id="submitHint">Select one or more tests to place a laboratory order.</div>
+        <div class="actions-right">
+          <button type="button" class="btn-primary" id="submitOrderBtn" disabled>Submit lab order</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ============== EXISTING ORDERS FOR PATIENT ============== -->
+    <div class="card">
+      <div class="section-head">
+        <h2 class="section-title">Existing lab orders for this patient</h2>
+        <button type="button" class="btn-secondary btn-sm" id="refreshOrdersBtn">Refresh</button>
+      </div>
+      <div id="existingOrdersList"></div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+/* ==================================================================================
+   STANDALONE DHIS2 LABORATORY ORDER PAGE (for health workers)
+   ----------------------------------------------------------------------------------
+   Designed to be launched directly from DHIS2 Capture / Tracker (via link, button,
+   or embedded iframe) with clinical context passed in the URL query string:
+
+     order.html?teiId=<UID>&enrollmentId=<UID>&programId=<UID>&orgUnitId=<UID>&requestedFrom=OPD
+
+   Accepted query parameter aliases (case-insensitive):
+     - Tracked Entity : teiId, tieid, tei, trackedEntity, trackedEntityId, trackedEntityInstance
+     - Enrollment     : enrollmentId, enrollment
+     - Program        : programId, program            (falls back to CONFIG.programUid)
+     - Org Unit       : orgUnitId, orgUnit, ou        (falls back to enrollment / config / user OU)
+     - Target Stage   : programStage, stageId, stage  (falls back to CONFIG.orderStageUid || CONFIG.laboratoryStageUid)
+     - Origin label   : requestedFrom, from, origin, sourceStage
+     - Order date     : occurredAt, eventDate, date   (defaults to today)
+     - Embedded mode  : embedded=1 or compact=1       (hides top header bar)
+     - Config URL     : configUrl                     (defaults to /ephc/api/dataStore/laboratory/config)
+
+   Creates an order event in the configured laboratory/order program stage with
+   CONFIG.dataElements.orders set to a JSON array of selected test codes (matching
+   the exact shape expected by index.html's Laboratory Worklist).
+================================================================================== */
+(function ($, window, document) {
+"use strict";
+
+const DEFAULT_DATASTORE_URL = "/ephc/api/dataStore/laboratory/config";
+const REQUIRED_CONFIG_KEYS = [
+    "programUid", "laboratoryStageUid", "testGroupSetUid", "dataElements.orders"
+];
+
+let CONFIG = null;
+let API_BASE = "/api";
+let CURRENT_USER = null;
+
+const ctx = {
+    teiId: "",
+    enrollmentId: "",
+    programId: "",
+    orgUnitId: "",
+    programStage: "",
+    requestedFrom: "",
+    orderDate: "",
+    embedded: false,
+    configUrl: DEFAULT_DATASTORE_URL
+};
+
+const state = {
+    patient: null,
+    enrollment: null,
+    selectedTests: new Set(),
+    activeSampleFilter: "ALL",
+    submitting: false,
+    existingOrders: []
+};
+
+/* ============================== Query string parser ============================== */
+function parseQueryParams(){
+    const raw = new URLSearchParams(window.location.search);
+    const map = {};
+    raw.forEach(function(value, key){
+        const k = key.toLowerCase();
+        if (map[k] === undefined && value.trim() !== "") map[k] = value.trim();
+    });
+    function firstOf(keys){
+        for (let i = 0; i < keys.length; i++){
+            const v = map[keys[i].toLowerCase()];
+            if (v) return v;
+        }
+        return "";
+    }
+    ctx.teiId = firstOf(["teiId", "tieid", "tei", "trackedEntity", "trackedEntityId", "trackedEntityInstance"]);
+    ctx.enrollmentId = firstOf(["enrollmentId", "enrollment"]);
+    ctx.programId = firstOf(["programId", "program"]);
+    ctx.orgUnitId = firstOf(["orgUnitId", "orgUnit", "ou"]);
+    ctx.programStage = firstOf(["programStage", "stageId", "stage"]);
+    ctx.requestedFrom = firstOf(["requestedFrom", "from", "origin", "sourceStage"]);
+    ctx.orderDate = firstOf(["occurredAt", "eventDate", "date"]) || todayIso();
+    ctx.embedded = firstOf(["embedded", "compact"]) === "1" || firstOf(["embedded", "compact"]).toLowerCase() === "true";
+    ctx.configUrl = firstOf(["configUrl"]) || DEFAULT_DATASTORE_URL;
+}
+
+/* ============================== API helpers ============================== */
+function apiPath(path){ return path.startsWith("http") ? path : API_BASE.replace(/\/$/, "") + "/" + path.replace(/^\//, ""); }
+function apiGet(path){ return $.ajax({ url: apiPath(path), method: "GET", dataType: "json" }); }
+function apiPost(path, data){ return $.ajax({ url: apiPath(path), method: "POST", contentType: "application/json", data: JSON.stringify(data), dataType: "json" }); }
+function postTracker(events, importStrategy){
+    return apiPost("/tracker?async=false&importStrategy=" + (importStrategy || "CREATE"), { events: events });
+}
+function trackerErrorMessage(xhr, fallback){
+    try {
+        const body = xhr.responseJSON || JSON.parse(xhr.responseText);
+        const reports = body && body.validationReport && body.validationReport.errorReports;
+        if (reports && reports.length) return reports.slice(0, 2).map(function(r){ return r.message; }).join(" — ");
+        if (body && body.message) return body.message;
+    } catch (e) { /* fall through */ }
+    return fallback;
+}
+
+/* ============================== Utilities ============================== */
+function escapeHtml(v){ return v == null ? "" : String(v).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#039;"); }
+function todayIso(){ const d = new Date(); return d.getFullYear() + "-" + String(d.getMonth()+1).padStart(2,"0") + "-" + String(d.getDate()).padStart(2,"0"); }
+function getByPath(obj, path){ return path.split(".").reduce(function(o,k){ return (o && o[k] !== undefined) ? o[k] : undefined; }, obj); }
+function dataValue(de, value){ return { dataElement: de, value: value == null ? "" : String(value) }; }
+function getDataValue(event, de){ if (!event || !event.dataValues || !de) return null; const x = event.dataValues.find(function(v){ return v.dataElement === de; }); return x ? x.value : null; }
+function pickLabel(obj){ if (!obj) return ""; return obj.displayShortName || obj.shortName || obj.displayName || obj.name || ""; }
+function sampleTypeName(code){ const x = (CONFIG.sampleTypes||[]).find(function(s){ return s.code === code; }); return x ? x.name : (code || ""); }
+function stageName(uid){ return (CONFIG.stageNames && CONFIG.stageNames[uid]) || uid; }
+function testName(code){ return (CONFIG.tests && CONFIG.tests[code]) ? CONFIG.tests[code].name : code; }
+
+function generateUid(){
+    const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    const alnum = letters + "0123456789";
+    let uid = letters.charAt(Math.floor(Math.random() * letters.length));
+    for (let i = 0; i < 10; i++) uid += alnum.charAt(Math.floor(Math.random() * alnum.length));
+    return uid;
+}
+
+function parseTokens(str){
+    const out = {};
+    if (!str) return out;
+    String(str).split(",").forEach(function(pair){
+        const idx = pair.indexOf(":");
+        if (idx === -1) return;
+        const key = pair.slice(0, idx).trim().toUpperCase();
+        const val = pair.slice(idx + 1).trim();
+        if (key) out[key] = val;
+    });
+    return out;
+}
+
+function parseLabOrders(value){
+    if (!value) return [];
+    if (Array.isArray(value)) return value.map(String);
+    if (typeof value === "object") return Object.keys(value).filter(function(k){ return value[k] === true; });
+    const s = String(value).trim();
+    if (!s) return [];
+    try { const p = JSON.parse(s); if (Array.isArray(p)) return p.map(String); } catch (e) { /* fall through */ }
+    return s.replace(/^\[/, "").replace(/\]$/, "").replace(/["']/g, "").split(/[,;|]/).map(function(x){ return x.trim(); }).filter(Boolean);
+}
+
+function getPatientDisplay(tei){
+    if (!tei) return { name: "Patient " + ctx.teiId, patientId: ctx.teiId, age: "", dob: "", sex: "" };
+    const map = CONFIG.patientAttributes || {};
+    function byUid(uid){
+        if (!uid || !tei.attributes) return "";
+        const a = tei.attributes.find(function(x){ return x.attribute === uid; });
+        return a ? (a.value || "") : "";
+    }
+    let name = [byUid(map.firstName), byUid(map.middleName), byUid(map.lastName)].filter(Boolean).join(" ");
+    if (!name && tei.attributes){
+        const guessNames = ["First name", "First Name", "Name", "Patient Name", "Full Name"];
+        for (const a of tei.attributes){ if (guessNames.includes(a.displayName) && a.value){ name = a.value; break; } }
+    }
+    const dob = byUid(map.dob);
+    let age = "";
+    if (dob){
+        const d = new Date(dob);
+        if (!isNaN(d)) age = Math.floor((Date.now() - d.getTime()) / (365.25 * 24 * 3600 * 1000));
+    }
+    return {
+        name: name || ("Patient " + ctx.teiId),
+        patientId: byUid(map.patientId) || tei.trackedEntity,
+        age: age, dob: dob, sex: byUid(map.sex)
+    };
+}
+
+/* ============================== Toasts & errors ============================== */
+function toast(message, type){
+    type = type || "info";
+    const icon = { success: "\u2713", error: "!", warning: "!", info: "i" }[type];
+    const $t = $('<div class="toast toast-' + type + '" role="status"><span class="toast-icon">' + icon + '</span><span class="toast-msg"></span></div>');
+    $t.find(".toast-msg").text(message);
+    $("#toastRegion").append($t);
+    requestAnimationFrame(function(){ $t.addClass("show"); });
+    setTimeout(function(){ $t.removeClass("show"); setTimeout(function(){ $t.remove(); }, 200); }, 4500);
+}
+
+function showFatalError(html){
+    $("#loading").addClass("hidden");
+    $("#app").addClass("hidden");
+    $("#fatalError").removeClass("hidden").html(html);
+}
+
+/* ============================== Configuration & metadata ============================== */
+function loadConfig(){
+    return $.ajax({ url: ctx.configUrl, method: "GET", dataType: "json" }).then(function(c){
+        const missing = REQUIRED_CONFIG_KEYS.filter(function(path){ return getByPath(c, path) === undefined; });
+        if (missing.length){
+            return $.Deferred().reject({
+                fatalHtml: "Datastore <code>laboratory/config</code> is missing required field(s): <code>" + missing.map(escapeHtml).join("</code>, <code>") + "</code>."
+            }).promise();
+        }
+        CONFIG = c;
+        API_BASE = (c.apiBaseUrl || "/api").replace(/\/$/, "");
+        if (!ctx.programId) ctx.programId = CONFIG.programUid;
+        if (!ctx.programStage) ctx.programStage = CONFIG.orderStageUid || CONFIG.laboratoryStageUid;
+    });
+}
+
+function loadCurrentUser(){
+    return apiGet("/me.json?fields=username,displayName,organisationUnits[id,name]")
+        .then(function(u){ CURRENT_USER = u; $("#currentUserLabel").text(u.displayName || u.username || ""); })
+        .catch(function(){ CURRENT_USER = null; });
+}
+
+function loadStageNames(){
+    return apiGet("/programStages?filter=program.id:eq:" + encodeURIComponent(ctx.programId) + "&fields=id,name,shortName,displayName,displayShortName&paging=false")
+        .then(function(r){ CONFIG.stageNames = {}; (r.programStages || []).forEach(function(s){ CONFIG.stageNames[s.id] = pickLabel(s); }); })
+        .catch(function(){ CONFIG.stageNames = {}; });
+}
+
+function loadTestCatalog(){
+    return apiGet("/dataElementGroupSets/" + encodeURIComponent(CONFIG.testGroupSetUid) + ".json?fields=dataElementGroups[id,code,name,shortName,displayName,displayShortName,description,dataElements[id,name,shortName,displayName,displayShortName,description]]")
+        .then(function(r){
+            CONFIG.tests = {};
+            (r.dataElementGroups || []).forEach(function(g){
+                const tokens = parseTokens(g.description);
+                const key = g.code || g.id;
+                CONFIG.tests[key] = {
+                    code: key,
+                    name: pickLabel(g),
+                    fullName: g.displayName || g.name || key,
+                    sampleType: tokens.SAMPLE || "",
+                    parameters: (g.dataElements || []).map(function(d){ return pickLabel(d); })
+                };
+            });
+        })
+        .catch(function(xhr){
+            console.error(xhr);
+            CONFIG.tests = {};
+            toast("Couldn't load the test catalog — check testGroupSetUid in laboratory/config.", "error");
+        });
+}
+
+/* Loads metadata for the `orders` data element (valueType + optionSet) so we
+   can format multi-select values in DHIS2's native comma-separated MULTI_TEXT
+   format and map test codes to exact OptionSet option codes before saving. */
+function loadOrdersDataElement(){
+    return apiGet("/dataElements/" + encodeURIComponent(CONFIG.dataElements.orders) + ".json?fields=id,valueType,optionSet[id,options[code,name,displayName]]")
+        .then(function(de){
+            CONFIG.ordersMeta = {
+                valueType: de.valueType || "",
+                optionSet: de.optionSet || null
+            };
+        })
+        .catch(function(){
+            CONFIG.ordersMeta = { valueType: "", optionSet: null };
+        });
+}
+
+function resolveOrderOptionCode(testCode){
+    const opts = CONFIG.ordersMeta && CONFIG.ordersMeta.optionSet && CONFIG.ordersMeta.optionSet.options;
+    if (!opts || !opts.length) return testCode;
+
+    // 1. Exact option code match
+    let hit = opts.find(function(o){ return o.code === testCode; });
+    if (hit) return hit.code;
+
+    // 2. Case-insensitive option code match
+    const lower = String(testCode).toLowerCase();
+    hit = opts.find(function(o){ return String(o.code || "").toLowerCase() === lower; });
+    if (hit) return hit.code;
+
+    // 3. Fallback match by option name / displayName against test code or display labels
+    const t = (CONFIG.tests && CONFIG.tests[testCode]) || {};
+    const candidates = [testCode, t.name, t.fullName].filter(Boolean).map(function(s){ return String(s).toLowerCase(); });
+    hit = opts.find(function(o){
+        const n = String(o.name || "").toLowerCase();
+        const dn = String(o.displayName || "").toLowerCase();
+        return candidates.includes(n) || candidates.includes(dn);
+    });
+    return hit ? hit.code : testCode;
+}
+
+function loadPatient(){
+    return apiGet("/tracker/trackedEntities/" + encodeURIComponent(ctx.teiId) + "?fields=trackedEntity,attributes,enrollments[enrollment,program,status,orgUnit],orgUnits")
+        .then(function(tei){
+            state.patient = tei;
+            const enrollments = tei.enrollments || [];
+            if (ctx.enrollmentId){
+                state.enrollment = enrollments.find(function(e){ return e.enrollment === ctx.enrollmentId; }) || null;
+            }
+            if (!state.enrollment){
+                state.enrollment = enrollments.find(function(e){ return e.program === ctx.programId && e.status === "ACTIVE"; }) || enrollments[0] || null;
+                if (!ctx.enrollmentId && state.enrollment) ctx.enrollmentId = state.enrollment.enrollment;
+            }
+            if (!ctx.orgUnitId){
+                if (state.enrollment && state.enrollment.orgUnit) ctx.orgUnitId = state.enrollment.orgUnit;
+                else if (CONFIG.orgUnitUid) ctx.orgUnitId = CONFIG.orgUnitUid;
+                else if (CURRENT_USER && CURRENT_USER.organisationUnits && CURRENT_USER.organisationUnits.length) ctx.orgUnitId = CURRENT_USER.organisationUnits[0].id;
+            }
+        })
+        .catch(function(xhr){
+            console.error(xhr);
+            state.patient = null;
+            if (!ctx.orgUnitId){
+                if (CONFIG.orgUnitUid) ctx.orgUnitId = CONFIG.orgUnitUid;
+                else if (CURRENT_USER && CURRENT_USER.organisationUnits && CURRENT_USER.organisationUnits.length) ctx.orgUnitId = CURRENT_USER.organisationUnits[0].id;
+            }
+            toast("Patient details could not be loaded; you can still submit the order using the URL parameters.", "warning");
+        });
+}
+
+/* ============================== Existing orders for patient ============================== */
+function isOrderEvent(e){
+    if (!e) return false;
+    const linkDe = CONFIG.dataElements.orderEvent || CONFIG.dataElements.opdEvent;
+    if (linkDe && getDataValue(e, linkDe)) return false;
+    if (CONFIG.dataElements.sampleId && getDataValue(e, CONFIG.dataElements.sampleId)) return false;
+    if (CONFIG.dataElements.labOrders && CONFIG.dataElements.labOrders !== CONFIG.dataElements.orders && getDataValue(e, CONFIG.dataElements.labOrders)) return false;
+    return parseLabOrders(getDataValue(e, CONFIG.dataElements.orders)).length > 0;
+}
+
+function deriveOrderStatus(samples){
+    if (!samples.length) return "ORDERED";
+    const statusDe = CONFIG.dataElements.status;
+    const statuses = samples.map(function(s){ return (statusDe && getDataValue(s, statusDe)) || "COLLECTED"; });
+    if (statuses.every(function(s){ return s === "VERIFIED"; })) return "VERIFIED";
+    if (statuses.every(function(s){ return s === "VERIFIED" || s === "COMPLETED"; })) return "COMPLETED";
+    if (statuses.some(function(s){ return s === "PROCESSING"; })) return "PROCESSING";
+    return "COLLECTED";
+}
+
+function loadExistingOrders(){
+    $("#existingOrdersList").html("<div class='small'>Loading existing lab orders…</div>");
+    const fields = "event,occurredAt,programStage,trackedEntity,enrollment,orgUnit,status,dataValues";
+    const url = "/tracker/events?program=" + encodeURIComponent(ctx.programId) +
+        "&trackedEntity=" + encodeURIComponent(ctx.teiId) +
+        "&pageSize=200&fields=" + fields;
+    apiGet(url).done(function(r){
+        const events = r.events || r.instances || [];
+        const linkDe = CONFIG.dataElements.orderEvent || CONFIG.dataElements.opdEvent;
+        const samplesByOrder = {};
+        events.forEach(function(e){
+            if (e.programStage !== CONFIG.laboratoryStageUid) return;
+            const link = linkDe ? getDataValue(e, linkDe) : null;
+            if (!link) return;
+            (samplesByOrder[link] = samplesByOrder[link] || []).push(e);
+        });
+        const orderStageEvents = events.filter(function(e){
+            return (e.programStage === ctx.programStage || e.programStage === CONFIG.orderStageUid || e.programStage === CONFIG.laboratoryStageUid) && isOrderEvent(e);
+        });
+        state.existingOrders = orderStageEvents
+            .map(function(e){
+                const samples = samplesByOrder[e.event] || [];
+                return {
+                    event: e,
+                    tests: parseLabOrders(getDataValue(e, CONFIG.dataElements.orders)),
+                    samples: samples,
+                    status: deriveOrderStatus(samples)
+                };
+            })
+            .sort(function(a, b){ return String(b.event.occurredAt || "").localeCompare(String(a.event.occurredAt || "")); });
+        renderExistingOrders();
+    }).fail(function(xhr){
+        console.error(xhr);
+        $("#existingOrdersList").html("<div class='empty'>Unable to load existing orders for this patient.</div>");
+    });
+}
+
+function renderExistingOrders(){
+    const $list = $("#existingOrdersList").empty();
+    if (!state.existingOrders.length){
+        $list.html("<div class='empty'>No laboratory orders recorded for this patient yet.</div>");
+        return;
+    }
+    state.existingOrders.forEach(function(item){
+        const e = item.event;
+        const names = item.tests.map(testName).join(", ");
+        const origin = (CONFIG.dataElements.requestedFrom && getDataValue(e, CONFIG.dataElements.requestedFrom)) || stageName(e.programStage);
+        $list.append(
+            '<div class="order-row">' +
+            '<div><div class="order-row__tests">' + escapeHtml(names) + '</div>' +
+            '<div class="order-row__meta">' + escapeHtml(e.occurredAt || "") +
+            ' &middot; ' + escapeHtml(origin) +
+            ' &middot; <span class="mono">' + escapeHtml(e.event) + '</span>' +
+            (item.samples.length ? ' &middot; ' + item.samples.length + ' sample' + (item.samples.length === 1 ? '' : 's') : '') +
+            '</div></div>' +
+            '<span class="status-chip status-' + escapeHtml(item.status) + '"><span class="dot"></span>' + escapeHtml(item.status) + '</span>' +
+            '</div>'
+        );
+    });
+}
+
+/* ============================== Rendering ============================== */
+function renderPatientContext(){
+    const disp = getPatientDisplay(state.patient);
+    $("#patientName").text(disp.name);
+
+    const metaBits = [
+        '<span>Patient ID <strong class="mono">' + escapeHtml(disp.patientId) + '</strong></span>'
+    ];
+    if (disp.age !== "") metaBits.push('<span>' + escapeHtml(disp.age) + ' yrs</span>');
+    if (disp.dob) metaBits.push('<span>DOB <strong>' + escapeHtml(disp.dob) + '</strong></span>');
+    if (disp.sex) metaBits.push('<span>' + escapeHtml(disp.sex) + '</span>');
+    $("#patientMeta").html(metaBits.join(""));
+
+    $("#targetStageBadge").html('Target stage: <strong>' + escapeHtml(stageName(ctx.programStage)) + '</strong>');
+
+    const tags = [
+        '<span class="ctx-tag">TEI: <strong>' + escapeHtml(ctx.teiId) + '</strong></span>',
+        '<span class="ctx-tag">Enrollment: <strong>' + escapeHtml(ctx.enrollmentId || "—") + '</strong></span>',
+        '<span class="ctx-tag">Program: <strong>' + escapeHtml(ctx.programId) + '</strong></span>',
+        '<span class="ctx-tag">Org Unit: <strong>' + escapeHtml(ctx.orgUnitId || "—") + '</strong></span>'
+    ];
+    $("#contextTags").html(tags.join(""));
+
+    $("#orderDateInput").val(ctx.orderDate);
+    if (CONFIG.dataElements.requestedFrom){
+        $("#requestedFromWrap").removeClass("hidden");
+        $("#requestedFromInput").val(ctx.requestedFrom);
+    }
+}
+
+function renderSampleTypeFilters(){
+    const codes = new Set();
+    Object.keys(CONFIG.tests || {}).forEach(function(k){
+        if (CONFIG.tests[k].sampleType) codes.add(CONFIG.tests[k].sampleType);
+    });
+    const $strip = $("#sampleTypeFilters").empty();
+    if (!codes.size) return;
+
+    const buttons = [{ code: "ALL", label: "All tests" }];
+    Array.from(codes).sort().forEach(function(code){
+        buttons.push({ code: code, label: sampleTypeName(code) || code });
+    });
+    buttons.forEach(function(b){
+        const cls = "filter-btn" + (state.activeSampleFilter === b.code ? " active" : "");
+        $strip.append($("<button>").attr("type", "button").addClass(cls).attr("data-sample", b.code).text(b.label));
+    });
+}
+
+function renderTestGrid(){
+    const $grid = $("#testGrid").empty();
+    const query = $("#testSearchBox").val().toLowerCase().trim();
+    const allCodes = Object.keys(CONFIG.tests || {}).sort(function(a, b){
+        return testName(a).localeCompare(testName(b));
+    });
+
+    const filtered = allCodes.filter(function(code){
+        const t = CONFIG.tests[code];
+        if (state.activeSampleFilter !== "ALL" && t.sampleType !== state.activeSampleFilter) return false;
+        if (query){
+            const haystack = (t.name + " " + t.fullName + " " + code + " " + sampleTypeName(t.sampleType) + " " + t.parameters.join(" ")).toLowerCase();
+            if (!haystack.includes(query)) return false;
+        }
+        return true;
+    });
+
+    $("#catalogCount").text(filtered.length + " of " + allCodes.length + " test" + (allCodes.length === 1 ? "" : "s"));
+
+    if (!allCodes.length){
+        $grid.html("<div class='empty' style='grid-column:1/-1'>No tests configured in testGroupSetUid.</div>");
+        return;
+    }
+    if (!filtered.length){
+        $grid.html("<div class='empty' style='grid-column:1/-1'>No tests match your filter.</div>");
+        return;
+    }
+
+    filtered.forEach(function(code){
+        const t = CONFIG.tests[code];
+        const checked = state.selectedTests.has(code);
+        const sampleLabel = t.sampleType ? sampleTypeName(t.sampleType) : "";
+        const paramsText = t.parameters.length ? t.parameters.join(", ") : "";
+        const $card = $(
+            '<label class="test-card' + (checked ? ' is-selected' : '') + '">' +
+            '<input type="checkbox" class="test-checkbox" value="' + escapeHtml(code) + '"' + (checked ? ' checked' : '') + '>' +
+            '<div class="test-card__body">' +
+              '<div class="test-card__top">' +
+                '<span class="test-card__name">' + escapeHtml(t.name) + '</span>' +
+                '<span class="test-card__code">' + escapeHtml(code) + '</span>' +
+              '</div>' +
+              (sampleLabel ? '<div class="test-card__sample">' + escapeHtml(sampleLabel) + '</div>' : '') +
+              (paramsText ? '<div class="test-card__params" title="' + escapeHtml(paramsText) + '">' + escapeHtml(paramsText) + '</div>' : '') +
+            '</div>' +
+            '</label>'
+        );
+        $grid.append($card);
+    });
+}
+
+function renderSelectedSummary(){
+    const codes = Array.from(state.selectedTests);
+    const count = codes.length;
+    $("#submitOrderBtn").prop("disabled", count === 0 || state.submitting);
+    $("#clearSelectionBtn").toggleClass("hidden", count === 0);
+
+    if (!count){
+        $("#selectedSummary").addClass("hidden");
+        $("#submitHint").text("Select one or more tests to place a laboratory order.");
+        return;
+    }
+
+    $("#selectedSummary").removeClass("hidden");
+    $("#selectedCountLabel").text(count + " test" + (count === 1 ? "" : "s") + " selected");
+    $("#submitHint").text("Creates a new laboratory order event in " + stageName(ctx.programStage) + ".");
+
+    const $chips = $("#selectedChips").empty();
+    codes.forEach(function(code){
+        const $chip = $('<span class="selected-chip"></span>').text(testName(code) + " ");
+        $chip.append($('<button type="button" aria-label="Remove">&times;</button>').on("click", function(){
+            state.selectedTests.delete(code);
+            renderTestGrid();
+            renderSelectedSummary();
+        }));
+        $chips.append($chip);
+    });
+}
+
+/* ============================== Order submission ============================== */
+function submitOrder(){
+    if (state.submitting) return;
+    const selected = Array.from(state.selectedTests);
+    if (!selected.length){ toast("Select at least one laboratory test.", "error"); return; }
+    if (!ctx.enrollmentId){ toast("Missing enrollmentId — cannot create a tracker event without an enrollment.", "error"); return; }
+    if (!ctx.orgUnitId){ toast("Missing orgUnitId — pass orgUnitId in the URL or configure orgUnitUid.", "error"); return; }
+
+    const occurredAt = $("#orderDateInput").val() || todayIso();
+    const resolvedCodes = selected.map(resolveOrderOptionCode);
+    const meta = CONFIG.ordersMeta || {};
+
+    // Guard against selecting multiple tests when the DHIS2 data element uses a
+    // single-select OptionSet (TEXT instead of MULTI_TEXT).
+    if (meta.optionSet && meta.valueType && meta.valueType !== "MULTI_TEXT" && resolvedCodes.length > 1){
+        toast(
+            "Multiple tests were selected, but the orders data element uses single-select OptionSet " +
+            meta.optionSet.id + " (" + meta.valueType + "). Change its Value Type to MULTI_TEXT in DHIS2, or select 1 test.",
+            "error"
+        );
+        return;
+    }
+
+    // Validate against OptionSet codes if loaded so mismatches are clear before POSTing.
+    if (meta.optionSet && meta.optionSet.options && meta.optionSet.options.length){
+        const validSet = new Set(meta.optionSet.options.map(function(o){ return o.code; }));
+        const invalid = resolvedCodes.filter(function(c){ return !validSet.has(c); });
+        if (invalid.length){
+            toast(
+                "Test code(s) not found in OptionSet " + meta.optionSet.id + ": " + invalid.join(", "),
+                "error"
+            );
+            return;
+        }
+    }
+
+    // DHIS2 MULTI_TEXT OptionSets require a comma-separated string of option codes
+    // (e.g. "Blood Grouping,DC,RBS"), not a JSON array string.
+    const ordersValue = resolvedCodes.join(",");
+    const eventId = generateUid();
+    const values = [ dataValue(CONFIG.dataElements.orders, ordersValue) ];
+
+    if (CONFIG.dataElements.requestedFrom){
+        const originVal = $("#requestedFromInput").val().trim();
+        if (originVal) values.push(dataValue(CONFIG.dataElements.requestedFrom, originVal));
+    }
+
+    const orderEvent = {
+        event: eventId,
+        trackedEntity: ctx.teiId,
+        program: ctx.programId,
+        programStage: ctx.programStage,
+        enrollment: ctx.enrollmentId,
+        orgUnit: ctx.orgUnitId,
+        occurredAt: occurredAt,
+        status: "ACTIVE",
+        dataValues: values
+    };
+
+    state.submitting = true;
+    $("#submitOrderBtn").prop("disabled", true).text("Submitting…");
+    postTracker([orderEvent], "CREATE")
+        .done(function(){
+            const names = selected.map(testName).join(", ");
+            toast("Laboratory order created.", "success");
+            $("#orderCreatedBanner")
+                .removeClass("hidden")
+                .html(
+                    '<strong>Lab order submitted.</strong> Ordered <strong>' + escapeHtml(names) + '</strong> ' +
+                    'on ' + escapeHtml(occurredAt) + ' (Event ID: <code>' + escapeHtml(eventId) + '</code>).'
+                );
+            state.selectedTests.clear();
+            renderTestGrid();
+            renderSelectedSummary();
+            loadExistingOrders();
+
+            // Notify parent frame if embedded inside a DHIS2 Capture plugin or modal.
+            if (window.parent && window.parent !== window){
+                try {
+                    window.parent.postMessage({ type: "DHIS2_LAB_ORDER_CREATED", event: orderEvent }, "*");
+                } catch (e) { /* ignore cross-origin postMessage restrictions */ }
+            }
+        })
+        .fail(function(xhr){
+            console.error(xhr);
+            toast(trackerErrorMessage(xhr, "Unable to submit the laboratory order."), "error");
+        })
+        .always(function(){
+            state.submitting = false;
+            $("#submitOrderBtn").text("Submit lab order");
+            renderSelectedSummary();
+        });
+}
+
+/* ============================== Event bindings ============================== */
+$(document).on("change", ".test-checkbox", function(){
+    const code = $(this).val();
+    if (this.checked) state.selectedTests.add(code);
+    else state.selectedTests.delete(code);
+    $(this).closest(".test-card").toggleClass("is-selected", this.checked);
+    renderSelectedSummary();
+});
+$(document).on("click", ".filter-btn", function(){
+    state.activeSampleFilter = $(this).attr("data-sample");
+    $(".filter-btn").removeClass("active");
+    $(this).addClass("active");
+    renderTestGrid();
+});
+$("#testSearchBox").on("input", renderTestGrid);
+$("#clearSelectionBtn").on("click", function(){
+    state.selectedTests.clear();
+    renderTestGrid();
+    renderSelectedSummary();
+});
+$("#submitOrderBtn").on("click", submitOrder);
+$("#refreshOrdersBtn").on("click", loadExistingOrders);
+
+/* ============================== Start-up ============================== */
+$(function(){
+    parseQueryParams();
+    if (ctx.embedded) $("body").addClass("embedded");
+
+    if (!ctx.teiId){
+        showFatalError(
+            "<strong>Missing required URL parameter:</strong> pass <code>teiId</code> (or <code>trackedEntity</code>), <code>enrollmentId</code>, and optionally <code>programId</code>, <code>orgUnitId</code>, <code>programStage</code>, and <code>requestedFrom</code> in the query string.<br><br>" +
+            "Example: <code>order.html?teiId=teiPat00001&amp;enrollmentId=enrPat00001&amp;programId=progEphc001&amp;requestedFrom=OPD</code>"
+        );
+        return;
+    }
+
+    loadConfig()
+        .then(function(){ return $.when(loadCurrentUser(), loadStageNames(), loadTestCatalog(), loadOrdersDataElement()); })
+        .then(function(){ return loadPatient(); })
+        .then(function(){
+            if (!ctx.enrollmentId){
+                showFatalError(
+                    "<strong>Missing enrollment ID:</strong> pass <code>enrollmentId</code> in the URL query string (no active enrollment was found on tracked entity <code>" + escapeHtml(ctx.teiId) + "</code>)."
+                );
+                return;
+            }
+            if (!ctx.orgUnitId){
+                showFatalError(
+                    "<strong>Missing organisation unit ID:</strong> pass <code>orgUnitId</code> in the URL query string or set <code>orgUnitUid</code> in <code>laboratory/config</code>."
+                );
+                return;
+            }
+            renderPatientContext();
+            renderSampleTypeFilters();
+            renderTestGrid();
+            renderSelectedSummary();
+            $("#loading").addClass("hidden");
+            $("#app").removeClass("hidden");
+            loadExistingOrders();
+        })
+        .fail(function(err){
+            console.error(err);
+            const html = (err && err.fatalHtml)
+                ? err.fatalHtml
+                : "Unable to load laboratory configuration from Data Store <code>" + escapeHtml(ctx.configUrl) + "</code>.";
+            showFatalError(html);
+        });
+});
+
+})(jQuery, window, document);
+</script>
+</body>
+</html>

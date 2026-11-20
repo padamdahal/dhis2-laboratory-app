@@ -435,14 +435,9 @@ tbody tr:hover{background:#f9fbfb}
 
         <div id="directTestSelection" class="hidden">
           <div class="field"><label>Tests to order</label><div id="directTestOptions"></div></div>
-          <div class="grid">
-            <div class="field"><label for="directSampleType">Sample type</label><select id="directSampleType"></select></div>
-            <div class="field"><label for="directSampleId">Sample ID</label><input id="directSampleId" readonly placeholder="Not generated yet"></div>
-          </div>
-          <div id="directBarcodeArea" class="barcode-area hidden"><div class="small">Barcode</div><div id="directBarcodeText" class="barcode"></div></div>
+          <div class="small" style="margin-bottom:10px">Sample collection happens next, on the order screen — same as any other order.</div>
           <div class="actions">
-            <button class="btn-secondary" id="directGenerateSampleBtn">Generate sample ID</button>
-            <button class="btn-primary" id="createDirectOrderBtn">Register sample</button>
+            <button class="btn-primary" id="createDirectOrderBtn">Register order</button>
           </div>
         </div>
       </div>
@@ -464,31 +459,39 @@ tbody tr:hover{background:#f9fbfb}
 
 <script>
 /* ==================================================================================
-   DHIS2 LABORATORY INFORMATION SYSTEM (LIS)
+   DHIS2 LABORATORY INFORMATION SYSTEM (LIS) — v2: dedicated order stage
    Everything lives inside one IIFE so no helper or state variable leaks onto
    `window` — the app is one well-contained module in a page that may later
    sit alongside other DHIS2 custom apps.
    ----------------------------------------------------------------------------------
    Configuration is loaded from:  {apiBaseUrl}/dataStore/laboratory/config
 
+   This is a deliberate architecture change from v1 (the original index.html),
+   which read lab orders off whichever clinical event requested them (an OPD
+   event, an ANC event, ...) by scanning every event in the whole program.
+   Here, every lab order — regardless of who requested it — is a single event
+   in its own dedicated program stage, CONFIG.orderStageUid. How a request
+   gets turned into one of these events is NOT this app's concern for
+   clinician-originated orders: that's handled by an external plugin embedded
+   in OPD/ANC/whatever stage, which creates the order event directly via the
+   tracker API. This app only ever reads/writes CONFIG.orderStageUid and
+   CONFIG.laboratoryStageUid — nothing else.
+
    Workflow
    --------
-   1. Any tracker event, in any program stage, may carry a "lab orders" multi-select
-      data element (CONFIG.dataElements.orders). The worklist is built by scanning
-      every event in the program and picking out the ones that have orders on them
-      — this is what lets OPD *and* any other stage (emergency, ANC, IPD, ...)
-      request laboratory tests without extra configuration.
-   2. Opening an order lets the lab technician collect one or more samples. Each
-      sample becomes its own event in the laboratory stage (CONFIG.laboratoryStageUid),
-      carrying: sample id, sample type, the subset of tests included in that sample
-      (CONFIG.dataElements.labOrders) and a link back to the originating event
-      (CONFIG.dataElements.opdEvent).
-   2b. Walk-in/direct tests (registered from this app, not from another stage) skip
-      step 1 entirely — there's no separate order event. The first sample created
-      for the visit IS the order: same laboratory-stage event as any other sample,
-      just with no opdEvent link. The worklist treats a lab-stage event with a
-      sample id and no opdEvent as its own row. See "Direct sample registration"
-      below and loadWorklist()'s standalone-sample handling.
+   1. An order is one event in CONFIG.orderStageUid, carrying the requested
+      tests (CONFIG.dataElements.orders). It's created either by the external
+      ordering plugin (from OPD, ANC, any clinical stage) or, for walk-in
+      tests with no prior clinical encounter, by this app's own "Register a
+      walk-in test" screen — both produce the exact same shape of event, so
+      everything downstream treats them identically. Because every order
+      lives in one stage, the worklist only ever needs to query that one
+      stage plus the laboratory stage - no whole-program scan.
+   2. Opening an order lets the lab technician collect one or more samples.
+      Each sample becomes its own event in CONFIG.laboratoryStageUid, carrying:
+      sample id, sample type, the subset of tests included in that sample
+      (CONFIG.dataElements.labOrders), and a link back to the order event
+      (CONFIG.dataElements.orderEvent).
    3. Result entry writes result values directly onto the sample's dataValues,
       using the result data elements configured per test
       (CONFIG.tests[code].resultDataElement).
@@ -507,9 +510,9 @@ tbody tr:hover{background:#f9fbfb}
 const DATASTORE_URL = "/ephc/api/dataStore/laboratory/config";
 const STATUS_FLOW = ["ORDERED", "COLLECTED", "PROCESSING", "COMPLETED", "VERIFIED"];
 const REQUIRED_CONFIG_KEYS = [
-    "programUid", "laboratoryStageUid", "testGroupSetUid", "sampleTypes",
+    "programUid", "orderStageUid", "laboratoryStageUid", "testGroupSetUid", "sampleTypes",
     "dataElements.orders", "dataElements.labOrders", "dataElements.status",
-    "dataElements.sampleId", "dataElements.sampleType", "dataElements.opdEvent"
+    "dataElements.sampleId", "dataElements.sampleType", "dataElements.orderEvent"
 ];
 /* Network chunk size for a single /tracker/events request. This is NOT a cap
    on how many events the app loads in total — it only controls how many
@@ -657,11 +660,25 @@ function parseLabOrders(value){
     try { const p = JSON.parse(s); if (Array.isArray(p)) return p.map(String); } catch (e) { /* not JSON, fall through */ }
     return s.replace(/^\[/, "").replace(/\]$/, "").replace(/["']/g, "").split(/[,;|]/).map(function(x){ return x.trim(); }).filter(Boolean);
 }
-/* Tests requested on a source (order) event, read from dataElements.orders
-   (the OPD multi-select). Walk-in/direct tests don't produce one of these
-   at all - see loadWorklist()'s handling of "standalone" samples below. */
+/* Tests requested on an order event, read from dataElements.orders. Every
+   order — clinician-originated (via the external ordering plugin) or
+   walk-in (via this app's own registration screen) — writes this the same
+   way, since both create their order event in CONFIG.orderStageUid. */
 function getOrderedTests(sourceEvent){ return parseLabOrders(getDataValue(sourceEvent, CONFIG.dataElements.orders)); }
 function getSampleTests(sampleEvent){ return parseLabOrders(getDataValue(sampleEvent, CONFIG.dataElements.labOrders)); }
+
+/* "Ordered from" no longer falls out for free from which stage the order
+   lives in, since every order lives in the same dedicated stage now. If the
+   config names an (optional) data element the ordering plugin uses to record
+   its origin stage/context, use that; otherwise fall back to the order
+   stage's own name, which is at least honest (constant, but not wrong). */
+function requestedFromLabel(order){
+    if (CONFIG.dataElements.requestedFrom){
+        const v = getDataValue(order, CONFIG.dataElements.requestedFrom);
+        if (v) return v;
+    }
+    return stageName(order.programStage);
+}
 
 function generateSampleId(){
     const cfg = CONFIG.sampleId || {};
@@ -860,8 +877,16 @@ function lookbackCutoffIso(){
 function loadWorklist(){
     $("#worklistLoading").removeClass("hidden");
     const cutoff = lookbackCutoffIso();
-    fetchAllEvents({ occurredAfter: cutoff }).then(function(allEvents){
-        state.worklist = buildWorklistItems(allEvents);
+    const sameStage = CONFIG.orderStageUid === CONFIG.laboratoryStageUid;
+    const req = sameStage
+        ? fetchAllEvents({ programStage: CONFIG.orderStageUid, occurredAfter: cutoff }).then(function(events){ return [events, events]; })
+        : $.when(
+            fetchAllEvents({ programStage: CONFIG.orderStageUid, occurredAfter: cutoff }),
+            fetchAllEvents({ programStage: CONFIG.laboratoryStageUid, occurredAfter: cutoff })
+          ).then(function(orderEvents, sampleEvents){ return [orderEvents, sampleEvents]; });
+
+    req.done(function(pair){
+        state.worklist = buildWorklistItems(pair[0], pair[1]);
         state.worklistPage = 1;
         renderStatStrip();
         renderWorklist();
@@ -871,45 +896,32 @@ function loadWorklist(){
     }).always(function(){ $("#worklistLoading").addClass("hidden"); });
 }
 
-/* Groups a flat list of events into worklist items: an "order" (OPD or any
-   other stage) with its linked samples, or a standalone walk-in sample
-   acting as its own order (see loadWorklist's/createDirectSample's
-   comments). Shared by loadWorklist() and the per-patient lookup in
-   selectDirectPatient(), so both use exactly the same grouping rules. */
-function buildWorklistItems(allEvents){
-    const labStageEvents = allEvents.filter(function(e){ return e.programStage === CONFIG.laboratoryStageUid; });
-    const otherStageEvents = allEvents.filter(function(e){ return e.programStage !== CONFIG.laboratoryStageUid; });
+/* True only for order-type events (not collected samples or empty events).
+   Ensures sample events are never listed as top-level worklist rows even when
+   orderStageUid and laboratoryStageUid point to the same program stage, or
+   when sample events appear in orderStageUid. */
+function isOrderEvent(e){
+    if (!e) return false;
+    if (getDataValue(e, CONFIG.dataElements.orderEvent)) return false;
+    if (getDataValue(e, CONFIG.dataElements.sampleId)) return false;
+    if (CONFIG.dataElements.labOrders !== CONFIG.dataElements.orders && getDataValue(e, CONFIG.dataElements.labOrders)) return false;
+    return getOrderedTests(e).length > 0;
+}
 
-    // A "sample" is any lab-stage event that actually represents collected
-    // material (it has a sample id) - as opposed to an event that's only
-    // there to hold a link, which shouldn't happen but is guarded against
-    // anyway.
-    const allSamples = labStageEvents.filter(function(e){ return !!getDataValue(e, CONFIG.dataElements.sampleId); });
-    // Linked samples reference an order event living elsewhere (OPD, any
-    // other stage) via opdEvent. Standalone samples have no opdEvent at
-    // all - they're walk-in registrations that ARE their own order. Both
-    // kinds can still gain further linked samples later (e.g. a second
-    // sample type for the same visit), grouped the same way either case.
+/* Groups order events with their linked samples. Shared by loadWorklist()
+   and the per-patient lookup in selectDirectPatient(). */
+function buildWorklistItems(orderEvents, sampleEvents){
     const samplesByOrder = {};
-    allSamples.forEach(function(s){
-        const link = getDataValue(s, CONFIG.dataElements.opdEvent);
+    sampleEvents.forEach(function(s){
+        const link = getDataValue(s, CONFIG.dataElements.orderEvent);
         if (!link) return;
         (samplesByOrder[link] = samplesByOrder[link] || []).push(s);
     });
-    const standaloneSamples = allSamples.filter(function(s){ return !getDataValue(s, CONFIG.dataElements.opdEvent); });
-
-    const orderEvents = otherStageEvents.filter(function(e){ return getOrderedTests(e).length > 0; });
-    const fromOrders = orderEvents.map(function(e){
+    return orderEvents.filter(isOrderEvent).map(function(e){
         const tests = getOrderedTests(e);
         const samples = samplesByOrder[e.event] || [];
         return { sourceEvent: e, tests: tests, samples: samples, status: deriveOrderStatus(samples), patientName: null, patientId: null };
     });
-    const fromStandaloneSamples = standaloneSamples.map(function(root){
-        const samples = [root].concat(samplesByOrder[root.event] || []);
-        return { sourceEvent: root, tests: getSampleTests(root), samples: samples, status: deriveOrderStatus(samples), patientName: null, patientId: null };
-    });
-
-    return fromOrders.concat(fromStandaloneSamples);
 }
 
 /* Order status reflects the least-advanced sample, so the worklist always
@@ -1010,7 +1022,7 @@ function renderWorklist(){
 
         const tr = $("<tr>");
         tr.append($("<td>").html("<strong>" + escapeHtml(display) + "</strong><div class='small mono'>" + escapeHtml(patientId) + "</div>"));
-        tr.append($("<td>").html(escapeHtml(stageName(e.programStage)) + "<div class='small mono'>" + escapeHtml(e.event) + "</div>"));
+        tr.append($("<td>").html(escapeHtml(requestedFromLabel(e)) + "<div class='small mono'>" + escapeHtml(e.event) + "</div>"));
         tr.append($("<td>").html(names.map(escapeHtml).join("<br>")));
         tr.append($("<td>").html(sampleSummary));
         tr.append($("<td>").text(e.occurredAt || ""));
@@ -1091,7 +1103,7 @@ function renderPatientInformation(){
         '<div class="patient-meta">Patient ID <strong class="mono">' + escapeHtml(disp.patientId) + '</strong>' +
         (disp.age !== "" ? ' &nbsp;·&nbsp; ' + escapeHtml(disp.age) + ' yrs' : '') +
         (disp.sex ? ' &nbsp;·&nbsp; ' + escapeHtml(disp.sex) : '') +
-        ' &nbsp;·&nbsp; Ordered from <strong>' + escapeHtml(stageName(item.sourceEvent.programStage)) + '</strong>' +
+        ' &nbsp;·&nbsp; Ordered from <strong>' + escapeHtml(requestedFromLabel(item.sourceEvent)) + '</strong>' +
         ' &nbsp;·&nbsp; ' + escapeHtml(item.sourceEvent.occurredAt || "") + '</div>'
     );
 }
@@ -1332,7 +1344,7 @@ function createLabEvent(){
             dataValue(CONFIG.dataElements.sampleId, sid),
             dataValue(CONFIG.dataElements.sampleType, sampleType),
             dataValue(CONFIG.dataElements.status, "COLLECTED"),
-            dataValue(CONFIG.dataElements.opdEvent, order.event),
+            dataValue(CONFIG.dataElements.orderEvent, order.event),
             dataValue(CONFIG.dataElements.labOrders, JSON.stringify(selected))
         ]
     };
@@ -1346,31 +1358,20 @@ function createLabEvent(){
 }
 
 /* Re-fetches the laboratory-stage samples linked to the current order and
-   refreshes every tab that depends on them. When the order is itself a
-   standalone walk-in sample (see loadWorklist()), that root event is
-   re-fetched too and kept as the first entry in `samples` - it never has an
-   opdEvent value pointing at itself, so the normal opdEvent-match filter
-   alone would otherwise drop it after every refresh. */
+   refreshes every tab that depends on them. */
 function refreshOrderData(){
     const order = state.currentOrder.sourceEvent;
-    const isStandaloneRoot = !getDataValue(order, CONFIG.dataElements.opdEvent) && !!getDataValue(order, CONFIG.dataElements.sampleId);
     const url = "/tracker/events?program=" + encodeURIComponent(CONFIG.programUid) +
         "&programStage=" + encodeURIComponent(CONFIG.laboratoryStageUid) +
         "&trackedEntity=" + encodeURIComponent(order.trackedEntity) +
         "&pageSize=200&fields=event,occurredAt,programStage,trackedEntity,enrollment,orgUnit,status,dataValues";
     apiGet(url).done(function(r){
-        const events = r.events || [];
-        let samples = events.filter(function(e){ return getDataValue(e, CONFIG.dataElements.opdEvent) === order.event; });
-        if (isStandaloneRoot){
-            const refreshedRoot = events.find(function(e){ return e.event === order.event; });
-            if (refreshedRoot){ state.currentOrder.sourceEvent = refreshedRoot; samples = [refreshedRoot].concat(samples); }
-        }
+        const samples = (r.events || []).filter(function(e){ return getDataValue(e, CONFIG.dataElements.orderEvent) === order.event; });
         state.currentOrder.samples = samples;
         state.currentOrder.status = deriveOrderStatus(samples);
         // Keep the worklist entry behind this order in sync too.
         const worklistItem = state.worklist.find(function(w){ return w.sourceEvent.event === order.event; });
         if (worklistItem){
-            worklistItem.sourceEvent = state.currentOrder.sourceEvent;
             worklistItem.samples = samples;
             worklistItem.status = state.currentOrder.status;
         }
@@ -1649,7 +1650,7 @@ function printLabReportForOrder(order, patientTei){
             (disp.dob ? "<div class='meta'><b>Date of birth</b>" + escapeHtml(disp.dob) + "</div>" : "") +
             (disp.sex ? "<div class='meta'><b>Sex</b>" + escapeHtml(disp.sex) + "</div>" : "") +
             "<div class='meta'><b>Patient ID</b>" + escapeHtml(disp.patientId) + "</div>" +
-            "<div class='meta'><b>Ordered from</b>" + escapeHtml(stageName(order.sourceEvent.programStage)) + " on " + escapeHtml(order.sourceEvent.occurredAt || "") + "</div>" +
+            "<div class='meta'><b>Ordered from</b>" + escapeHtml(requestedFromLabel(order.sourceEvent)) + " on " + escapeHtml(order.sourceEvent.occurredAt || "") + "</div>" +
             "<hr>" + sections +
             "<script>window.onload=function(){window.print();}<" + "/script></body></html>"
         );
@@ -1674,19 +1675,14 @@ function printReportForWorklistItem(item){
     });
 }
 
-/* ============================== Direct sample registration ============================== */
+/* ============================== Direct order registration (walk-in) ============================== */
 /* For patients requesting a test directly (an ANC panel, a walk-in sugar
-   test) with no order event from OPD or any other stage, and no separate
-   clinician-then-lab handoff to model. Rather than create a throwaway
-   "order" event purely to hold the request, the first sample collected here
-   IS the order: a normal event in CONFIG.laboratoryStageUid, with a sample
-   id/type/status like any other sample, but no opdEvent link. loadWorklist()
-   recognises a lab-stage event with a sample id and no opdEvent as a
-   standalone worklist row in its own right. If the visit needs a second
-   sample (e.g. blood + urine for a panel), that one links back via opdEvent
-   to this root sample exactly like a normal order's second sample would -
-   the existing "Collect a new sample" screen in the order detail view
-   handles that without any special-casing. */
+   test) with no prior clinical encounter to hang the order off. This
+   creates a normal order event in CONFIG.orderStageUid - the exact same
+   shape of event the external ordering plugin creates from OPD/ANC/any
+   other stage - so everything past this point (collecting samples,
+   entering results, verifying, printing) is identical to any other order.
+   No special-casing needed anywhere downstream. */
 
 function openDirectOrderView(){
     if (!CONFIG.patientAttributes || !CONFIG.patientAttributes.patientId){
@@ -1700,8 +1696,6 @@ function openDirectOrderView(){
     $("#directExistingOrders").addClass("hidden");
     $("#directExistingOrdersList").empty();
     $("#directTestSelection").addClass("hidden");
-    $("#directSampleId").val("");
-    $("#directBarcodeArea").addClass("hidden");
     $("#directPatientSearch").removeClass("hidden");
     $("#worklistView, #orderView").addClass("hidden");
     $("#directOrderView").removeClass("hidden");
@@ -1757,7 +1751,7 @@ function selectDirectPatient(tei){
     $("#directTestSelection").addClass("hidden");
 
     if (!enrollment){
-        $panel.append("<div class='message warning' style='margin-top:12px'>This patient isn't actively enrolled in the ePHC program, so a lab sample can't be created for them here yet. Enroll them in the program first.</div>");
+        $panel.append("<div class='message warning' style='margin-top:12px'>This patient isn't actively enrolled in the ePHC program, so a lab order can't be created for them here yet. Enroll them in the program first.</div>");
         return;
     }
 
@@ -1769,7 +1763,9 @@ function selectDirectPatient(tei){
     $("#directExistingOrdersList").html("<div class='small' style='padding:8px 0'>Checking for existing lab activity…</div>");
     $("#directExistingOrders").removeClass("hidden");
     fetchEventsForTrackedEntity(tei.trackedEntity).then(function(events){
-        const items = buildWorklistItems(events);
+        const orderEvents = events.filter(function(e){ return e.programStage === CONFIG.orderStageUid; });
+        const sampleEvents = events.filter(function(e){ return e.programStage === CONFIG.laboratoryStageUid; });
+        const items = buildWorklistItems(orderEvents, sampleEvents);
         if (items.length){
             renderExistingOrdersForPatient(items);
         } else {
@@ -1788,7 +1784,7 @@ function renderExistingOrdersForPatient(items){
     items.forEach(function(item){
         const names = item.tests.map(testName).join(", ");
         const $row = $(
-            '<div class="search-result"><div class="details"><strong>' + escapeHtml(stageName(item.sourceEvent.programStage)) + '</strong> ' + tplStatusChip(item.status) +
+            '<div class="search-result"><div class="details"><strong>' + escapeHtml(requestedFromLabel(item.sourceEvent)) + '</strong> ' + tplStatusChip(item.status) +
             '<div class="id">' + escapeHtml(item.sourceEvent.occurredAt || "") + (names ? " · " + escapeHtml(names) : "") + '</div></div></div>'
         );
         $row.append($("<button>").addClass("btn-primary btn-sm").text("Open").on("click", function(){
@@ -1801,8 +1797,6 @@ function renderExistingOrdersForPatient(items){
 
 function showNewDirectOrderForm(){
     renderDirectTestOptions();
-    setupSampleTypes("#directSampleType");
-    generateDirectSampleId(); // auto-fill sample id + barcode preview; button below can still regenerate
     $("#directTestSelection").removeClass("hidden");
 }
 
@@ -1818,14 +1812,11 @@ function renderDirectTestOptions(){
     });
 }
 
-function generateDirectSampleId(){
-    const id = generateSampleId();
-    $("#directSampleId").val(id);
-    $("#directBarcodeText").text(barcodeText(id));
-    $("#directBarcodeArea").removeClass("hidden");
-}
-
-function createDirectSample(){
+/* Creates the order event only - same shape the external ordering plugin
+   would produce. Sample collection (sample type, sample id) happens next,
+   as a completely normal "Collect a new sample" step once the order is
+   open, exactly like a plugin-originated order. */
+function createDirectOrder(){
     const selected = [];
     $("#directTestOptions input:checked").each(function(){ selected.push($(this).val()); });
     if (!selected.length){ toast("Select at least one test.", "error"); return; }
@@ -1834,43 +1825,33 @@ function createDirectSample(){
     const tei = state.directOrder.patient;
     if (!enrollment || !tei) return;
 
-    let sid = $("#directSampleId").val().trim();
-    if (!sid){ generateDirectSampleId(); sid = $("#directSampleId").val().trim(); }
-    const sampleType = $("#directSampleType").val();
-
     const newEventId = generateUid();
-    const rootSample = {
+    const orderEvent = {
         event: newEventId,
         trackedEntity: tei.trackedEntity,
         program: CONFIG.programUid,
-        programStage: CONFIG.laboratoryStageUid,
+        programStage: CONFIG.orderStageUid,
         enrollment: enrollment.enrollment,
         orgUnit: enrollment.orgUnit,
         occurredAt: todayIso(),
         status: "ACTIVE",
-        dataValues: [
-            dataValue(CONFIG.dataElements.sampleId, sid),
-            dataValue(CONFIG.dataElements.sampleType, sampleType),
-            dataValue(CONFIG.dataElements.status, "COLLECTED"),
-            dataValue(CONFIG.dataElements.labOrders, JSON.stringify(selected))
-        ]
+        dataValues: [ dataValue(CONFIG.dataElements.orders, selected.join(",")) ]
     };
 
     $("#createDirectOrderBtn").prop("disabled", true).text("Registering…");
-    postTracker([rootSample], "CREATE")
+    postTracker([orderEvent], "CREATE")
         .done(function(){
             const disp = getPatientDisplay(tei);
             state.worklist.unshift({
-                sourceEvent: rootSample, tests: selected, samples: [rootSample],
-                status: "COLLECTED", patientName: disp.name, patientId: disp.patientId
+                sourceEvent: orderEvent, tests: selected, samples: [],
+                status: "ORDERED", patientName: disp.name, patientId: disp.patientId
             });
-            state.currentPatient = tei;
-            toast("Sample registered.", "success");
+            toast("Order registered.", "success");
             $("#directOrderView").addClass("hidden");
             openOrder(newEventId);
         })
-        .fail(function(xhr){ console.error(xhr); toast(trackerErrorMessage(xhr, "Unable to register the sample."), "error"); })
-        .always(function(){ $("#createDirectOrderBtn").prop("disabled", false).text("Register sample"); });
+        .fail(function(xhr){ console.error(xhr); toast(trackerErrorMessage(xhr, "Unable to register the order."), "error"); })
+        .always(function(){ $("#createDirectOrderBtn").prop("disabled", false).text("Register order"); });
 }
 
 function goBack(){
@@ -1915,9 +1896,8 @@ $("#newDirectOrderBtn").on("click", openDirectOrderView);
 $("#directBackBtn").on("click", function(){ $("#directOrderView").addClass("hidden"); $("#worklistView").removeClass("hidden"); loadWorklist(); });
 $("#directSearchBtn").on("click", searchDirectPatients);
 $("#directSearchBox").on("keydown", function(e){ if (e.key === "Enter") searchDirectPatients(); });
-$("#directGenerateSampleBtn").on("click", generateDirectSampleId);
 $("#directRegisterNewAnywayBtn").on("click", function(){ $("#directExistingOrders").addClass("hidden"); showNewDirectOrderForm(); });
-$("#createDirectOrderBtn").on("click", createDirectSample);
+$("#createDirectOrderBtn").on("click", createDirectOrder);
 $("#refreshBtn").on("click", loadWorklist);
 $("#searchBox").on("input", function(){ state.worklistPage = 1; renderWorklist(); });
 $("#statusFilter").on("change", function(){ state.worklistPage = 1; renderWorklist(); });
